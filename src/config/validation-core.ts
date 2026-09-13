@@ -45,6 +45,51 @@ import {
 import { OpenClawSchema } from "./zod-schema.js";
 import { McpServerNameSchema, NodeHostMcpServerNameSchema } from "./zod-schema.root-support.js";
 
+const EMPTY_ALLOW_POLICY_MESSAGE =
+  'Empty allow list permits everything not denied; use deny:["*"] to deny all or omit allow to keep the default.';
+
+function pushEmptyAllowWarning(
+  warnings: ConfigValidationIssue[],
+  path: string,
+  policy: unknown,
+): void {
+  if (!isRecord(policy)) {
+    return;
+  }
+  const allow: unknown = policy.allow;
+  if (Array.isArray(allow) && allow.length === 0) {
+    warnings.push({ path, message: EMPTY_ALLOW_POLICY_MESSAGE });
+  }
+}
+
+/**
+ * Warns for explicit `allow: []` tool policies. An empty allow list reads as
+ * "no tools" but the matcher treats it as allow-all (same as omitting
+ * allow), so validation stays silent on a security UX trap. Warn-only: no
+ * runtime semantics change. Refs #147342.
+ */
+export function collectEmptyAllowPolicyWarnings(config: OpenClawConfig): ConfigValidationIssue[] {
+  const warnings: ConfigValidationIssue[] = [];
+  pushEmptyAllowWarning(warnings, "tools", config.tools);
+  const globalBySender: unknown = config.tools?.toolsBySender;
+  if (isRecord(globalBySender)) {
+    for (const [sender, policy] of Object.entries(globalBySender)) {
+      pushEmptyAllowWarning(warnings, `tools.toolsBySender.${sender}`, policy);
+    }
+  }
+  for (const entry of listAgentEntries(config)) {
+    const base = `agents.entries.${entry.id}.tools`;
+    pushEmptyAllowWarning(warnings, base, entry.tools);
+    const bySender: unknown = isRecord(entry.tools) ? entry.tools.toolsBySender : undefined;
+    if (isRecord(bySender)) {
+      for (const [sender, policy] of Object.entries(bySender)) {
+        pushEmptyAllowWarning(warnings, `${base}.toolsBySender.${sender}`, policy);
+      }
+    }
+  }
+  return warnings;
+}
+
 export function collectHeartbeatOwnerWarnings(config: OpenClawConfig): ConfigValidationIssue[] {
   const agentEntries = listAgentEntries(config);
   // Match heartbeat enrollment so validation never warns for an owner the runner can use.

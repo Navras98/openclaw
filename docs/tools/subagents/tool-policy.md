@@ -55,7 +55,15 @@ By default, sub-agents below depth `5` receive `sessions_spawn`, `subagents`,
 
 `tools.subagents.tools.allow` is a final allow-only filter. It can narrow
 the already-resolved tool set, but it cannot **add back** a tool removed
-by `tools.profile`. For example, `tools.profile: "coding"` includes
+by `tools.profile`.
+
+> **Empty `allow` means allow-all, not deny-all.** An explicit `allow: []`
+> is identical to omitting `allow`: every tool not denied stays allowed.
+> If you mean "no tools", use `deny: ["*"]`. `openclaw config validate`
+> warns on every empty `allow` list it finds (global `tools`, agent entry
+> `tools`, and `toolsBySender` overrides).
+
+For example, `tools.profile: "coding"` includes
 `web_search`/`web_fetch` but not the `browser` tool. To let
 coding-profile sub-agents use browser automation, add browser at the
 profile stage:
