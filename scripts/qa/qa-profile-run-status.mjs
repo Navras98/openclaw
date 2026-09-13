@@ -120,26 +120,31 @@ function collect() {
     add(null, "input-unavailable");
   }
   entries.sort((left, right) => compareText(left.name, right.name));
-  for (const [index, entry] of entries.entries()) {
+  // download-artifact extracts one match at the root without an artifact-name directory.
+  // Treat the whole root as one artifact; its status supplies the shard ID.
+  const rootFiles = ["qa-evidence.json", "qa-profile-run-status.json"];
+  const artifacts = entries.some((entry) => rootFiles.includes(entry.name)) ? [null] : entries;
+  for (const [index, entry] of artifacts.entries()) {
     // Artifact names and payload prose are untrusted; publish only an ordinal and known IDs.
     const source = `artifact-${String(index + 1).padStart(3, "0")}`;
-    if (!entry.isDirectory()) {
+    if (entry && !entry.isDirectory()) {
       add(source, "invalid-artifact-directory");
       continue;
     }
-    const artifactMatch = /^qa-profile-evidence-shard-(shard-[0-9]{2})-([0-9a-f]{40})$/u.exec(
-      entry.name,
-    );
+    const artifactMatch =
+      entry && /^qa-profile-evidence-shard-(shard-[0-9]{2})-([0-9a-f]{40})$/u.exec(entry.name);
     const artifactId = artifactMatch?.[1] ?? null;
-    if (!artifactMatch || !planned.has(artifactId)) {
+    if (entry && (!artifactMatch || !planned.has(artifactId))) {
       add(source, "unexpected-artifact");
     }
     if (artifactMatch && artifactMatch[2] !== env.TARGET_SHA) {
       add(source, "artifact-sha-mismatch");
     }
-    const directory = path.join(env.INPUT_DIR, entry.name);
+    const directory = entry ? path.join(env.INPUT_DIR, entry.name) : env.INPUT_DIR;
+    let hasEvidence = false;
     try {
       if (fs.lstatSync(path.join(directory, "qa-evidence.json")).isFile()) {
+        hasEvidence = true;
         evidenceFiles += 1;
         if (planned.has(artifactId)) {
           evidenceIds.add(artifactId);
@@ -185,11 +190,14 @@ function collect() {
     if (!expected) {
       add(source, "unexpected-shard");
     }
-    if (id !== artifactId) {
+    if (entry && id !== artifactId) {
       add(source, "artifact-shard-mismatch");
     }
     if (expected) {
       statusCounts.set(id, (statusCounts.get(id) ?? 0) + 1);
+      if (!entry && hasEvidence) {
+        evidenceIds.add(id);
+      }
     }
     for (const [matches, reason] of [
       [status.profile === env.QA_PROFILE, "profile-mismatch"],

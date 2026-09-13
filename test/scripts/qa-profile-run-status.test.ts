@@ -5,6 +5,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
@@ -34,7 +35,7 @@ const plan = {
   ],
 };
 
-function fixture() {
+function fixture(layout: "named" | "direct" = "named") {
   const root = tempDirs.make("openclaw-qa-profile-status-");
   const selected = path.join(root, "selected");
   mkdirSync(selected);
@@ -69,10 +70,10 @@ function fixture() {
     completedAt: "2026-09-10T00:00:00.000Z",
   });
   const writeShard = (index = 0, payload: unknown = status(index), artifactSha = targetSha) => {
-    const directory = path.join(
-      input,
-      `qa-profile-evidence-shard-${plan.include[index]!.id}-${artifactSha}`,
-    );
+    const directory =
+      layout === "direct"
+        ? input
+        : path.join(input, `qa-profile-evidence-shard-${plan.include[index]!.id}-${artifactSha}`);
     mkdirSync(directory, { recursive: true });
     writeFileSync(path.join(directory, "qa-evidence.json"), '{"fixture":"unchanged"}\n');
     const statusPath = path.join(directory, "qa-profile-run-status.json");
@@ -96,6 +97,105 @@ function fixture() {
 }
 
 describe("QA profile failure diagnostics", () => {
+  it.each([
+    { label: "one of two planned shards", matrix: plan, missing: ["shard-01"] },
+    { label: "one planned shard", matrix: { include: [plan.include[1]] }, missing: [] },
+  ])("retains a directly extracted survivor with $label", ({ matrix, missing }) => {
+    const f = fixture("direct");
+    const statusPath = f.writeShard(1, {
+      ...f.status(1),
+      exitCode: 137,
+      timedOut: true,
+      timeoutOutcome: "kill",
+    });
+    const evidencePath = path.join(f.input, "qa-evidence.json");
+    const payloadFiles = [
+      ["qa-suite-report.md", "# QA scenario suite\n"],
+      ["qa-suite-summary.json", '{"scenarios":[]}\n'],
+      ["script/qa-evidence.json", '{"execution":"nested"}\n'],
+    ] as const;
+    for (const [relativePath, content] of payloadFiles) {
+      const filePath = path.join(f.input, relativePath);
+      mkdirSync(path.dirname(filePath), { recursive: true });
+      writeFileSync(filePath, content);
+    }
+    const inputPaths = [
+      statusPath,
+      evidencePath,
+      ...payloadFiles.map(([relativePath]) => path.join(f.input, relativePath)),
+    ];
+    const originalInputs = inputPaths.map((filePath) => readFileSync(filePath));
+    const { result } = f.collect({
+      PLAN_MATRIX_JSON: JSON.stringify(matrix),
+      SHARD_COUNT: String(matrix.include.length),
+    });
+    expect(result.shards).toEqual([
+      {
+        id: "shard-02",
+        source: "artifact-001",
+        exitCode: 137,
+        timedOut: true,
+        timeoutOutcome: "kill",
+        completedAt: "2026-09-10T00:00:00.000Z",
+      },
+    ]);
+    expect(result).toMatchObject({ exitCode: null, timedOut: true, timeoutOutcome: "kill" });
+    expect(result.diagnostics).toMatchObject({
+      stages: { AGGREGATE_OUTCOME: "failure", FINALIZE_OUTCOME: "skipped" },
+      statusFiles: 1,
+      evidenceFiles: 1,
+      missingStatuses: missing,
+      missingEvidence: missing,
+      issues: [],
+    });
+    expect(inputPaths.map((filePath) => readFileSync(filePath))).toEqual(originalInputs);
+    expect(readdirSync(f.output)).toEqual(["qa-profile-run-status.json"]);
+  });
+
+  it("does not attribute directly extracted evidence to an unplanned shard", () => {
+    const f = fixture("direct");
+    f.writeShard(0, {
+      ...f.status(),
+      shard: { ...plan.include[0], id: "shard-99" },
+    });
+    const { result } = f.collect();
+    expect(result.diagnostics).toMatchObject({
+      statusFiles: 1,
+      evidenceFiles: 1,
+      missingStatuses: ["shard-01", "shard-02"],
+      missingEvidence: ["shard-01", "shard-02"],
+    });
+    expect(result.diagnostics.issues).toContainEqual({
+      source: "artifact-001",
+      reason: "unexpected-shard",
+    });
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "does not follow a directly extracted status symlink",
+    () => {
+      const f = fixture("direct");
+      mkdirSync(f.input, { recursive: true });
+      const target = path.join(f.root, "private-status.json");
+      const original = JSON.stringify({ ...f.status(), stderr: "private-status-sentinel" });
+      writeFileSync(target, original);
+      symlinkSync(target, path.join(f.input, "qa-profile-run-status.json"));
+      const { text, result } = f.collect();
+      expect(result.shards).toEqual([]);
+      expect(result.diagnostics).toMatchObject({
+        statusFiles: 0,
+        missingStatuses: ["shard-01", "shard-02"],
+      });
+      expect(result.diagnostics.issues).toContainEqual({
+        source: "artifact-001",
+        reason: "missing-or-malformed-status",
+      });
+      expect(text).not.toContain("private-status-sentinel");
+      expect(text).not.toContain(f.root);
+      expect(readFileSync(target, "utf8")).toBe(original);
+    },
+  );
+
   it.skipIf(process.platform === "win32").each(["missing", "timeout"])(
     "retains status after the actual aggregate shell rejects %s evidence",
     (failure) => {
@@ -262,20 +362,28 @@ describe("QA profile failure diagnostics", () => {
     },
   );
 
-  it.each(["{", "null", "[]", "x".repeat(65 * 1024)])(
-    "bounds malformed status input %#",
-    (payload) => {
-      const f = fixture();
-      const source = f.writeShard(0, payload);
-      const original = readFileSync(source);
-      const { result } = f.collect();
-      expect(result.shards).toEqual([]);
-      expect(result.diagnostics.issues[0].reason).toBe(
-        payload.length > 64 * 1024 ? "status-size-limit" : "missing-or-malformed-status",
-      );
-      expect(readFileSync(source)).toEqual(original);
-    },
-  );
+  it.each(
+    (["named", "direct"] as const).flatMap((layout) =>
+      ['{"untrusted-status-sentinel":', "null", "[]", "x".repeat(65 * 1024)].map((payload) => ({
+        layout,
+        payload,
+      })),
+    ),
+  )("bounds malformed $layout status input %#", ({ layout, payload }) => {
+    const f = fixture(layout);
+    const source = f.writeShard(0, payload);
+    const original = readFileSync(source);
+    const { text, result } = f.collect();
+    expect(result.shards).toEqual([]);
+    expect(result.diagnostics.issues[0].reason).toBe(
+      payload.length > 64 * 1024 ? "status-size-limit" : "missing-or-malformed-status",
+    );
+    expect(readFileSync(source)).toEqual(original);
+    expect(result.diagnostics.missingStatuses).toEqual(["shard-01", "shard-02"]);
+    expect(text).not.toContain("untrusted-status-sentinel");
+    expect(text).not.toContain(f.root);
+    expect(Buffer.byteLength(text)).toBeLessThan(2048);
+  });
 
   it("reports duplicate, unexpected, identity and membership diagnostics without leaking payloads", () => {
     const f = fixture();
