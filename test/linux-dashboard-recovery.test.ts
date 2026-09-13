@@ -131,7 +131,7 @@ test.each(
         setInterval() {},
       };
       const actions = await vm.runInNewContext(
-        `(async () => { ${dashboardSource}\nreturn { renderConnectionChoices, continueLocalSetup }; })()`,
+        `(async () => { ${dashboardSource}\nreturn { renderConnectionChoices, continueLocalSetup, install }; })()`,
         { document, URLSearchParams, window },
       );
       actions.renderConnectionChoices();
@@ -166,21 +166,28 @@ test.each(
           elements.get("#activity-label")?.textContent,
           externalService ? "Connecting to your local Gateway…" : "Starting your local Gateway…",
         );
-      } else if (releaseBuild) {
-        assert.equal(elements.get("#title")?.textContent, "OpenClaw needs attention");
-        assert.equal(elements.get("#description")?.textContent, installFailure);
-        assert.equal(elements.get("#log-status")?.textContent, "FAILED");
-        assert.equal(elements.get("#install-controls")?.classList.contains("hidden"), false);
-      } else {
+      } else if (!releaseBuild) {
         assert.equal(elements.get("#title")?.textContent, "Choose a release channel");
         if (externalService) {
           assert.match(elements.get("#description")?.textContent ?? "", /system Node.js and npm/);
         }
         assert.equal(elements.get("#install-controls")?.classList.contains("hidden"), false);
+        assert.equal(
+          invoked.some(({ command }) => command === "install_cli"),
+          false,
+        );
+        await actions.install();
+      }
+      if (phase === "missingCli") {
+        assert.equal(elements.get("#title")?.textContent, "OpenClaw needs attention");
+        assert.equal(elements.get("#description")?.textContent, installFailure);
+        assert.equal(elements.get("#log-status")?.textContent, "FAILED");
+        assert.equal(elements.get("#install-controls")?.classList.contains("hidden"), false);
+        assert.equal(elements.get("#install-button")?.disabled, false);
       }
       assert.equal(
         invoked.filter(({ command }) => command === "install_cli").length,
-        phase === "missingCli" && releaseBuild ? 1 : 0,
+        phase === "missingCli" ? 1 : 0,
       );
       assert.equal(
         invoked.some(({ command }) => command === "gateway_action"),
