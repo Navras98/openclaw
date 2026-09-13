@@ -44,15 +44,15 @@ Verified in `extensions/telegram/src/polling-session.ts` (admission block around
 
 ### What "committed" means here
 
-- The spool is the account-scoped durable ingress queue opened via `state.openChannelIngressQueue()` for `stateDir/telegram/ingress-spool-<account>` (see `resolveTelegramIngressSpoolDir()` in `extensions/telegram/src/telegram-ingress-spool.ts`). On a default install the state directory holds `openclaw.sqlite` (SQLite WAL), so the spool inherits the state store's durability — it is not a separate fsync-verified log with its own documented guarantee.
-- When the queue is drained and healthy the spool directory is empty; pending updates wait there when the drain stalls. A failed handler remains retryable from that queue.
+- The spool is the account-scoped durable ingress queue opened via `state.openChannelIngressQueue()` for `stateDir/telegram/ingress-spool-<account>` (see `resolveTelegramIngressSpoolDir()` in `extensions/telegram/src/telegram-ingress-spool.ts`). The spool-shaped path is used to derive the account and state root; the payloads themselves are rows in the shared `channel_ingress_events` table in `state/openclaw.sqlite` (see `src/channels/message/ingress-queue.ts`), written through the state-store transaction. So the spool inherits the state store's durability — it is not a separate fsync-verified log with its own documented guarantee.
+- A healthy drained queue leaves no visible backlog, but that is observed in the queue table, not in the spool directory: the directory can remain empty while a backlog exists, so an empty directory must not be read as "queue drained". A failed handler remains retryable from that queue.
 - This page does not promise an fsync, a transaction boundary, or a retention window beyond what the state store provides. If you need a stronger guarantee for your deployment, verify it against the state-store implementation in your release before relying on it.
 
 ### What `offset queued` does and does not mean
 
-- `offset queued` records the local restart position after the spool enqueue. It is local catch-up, not the Telegram server acknowledgement.
-- Telegram advances the server-side offset only when a subsequent `getUpdates` request carries a higher `offset` (standard Telegram Bot API behavior). If the process crashes after spooling but before the next poll, the update is recovered from the local spool on restart rather than redelivered by Telegram — provided the state directory survived.
-- If the state directory is ephemeral (wiped container volume, fresh state dir on restart), both the spool and the saved offset are lost. Updates acknowledged server-side after the last successful poll are then gone from OpenClaw's perspective. Use a persistent state directory when inbound durability matters.
+- `offset queued` means the restart-offset write has been *scheduled*, not committed: `persistUpdateId(updateId)` returns `void | Promise<void>` and the poller logs `offset queued` and ACKs the worker without awaiting it (`extensions/telegram/src/polling-session.ts`, admission block). A failure surfaces later as `offset persist failed` and, per the in-code contract, must not stall intake during a state-store outage.
+- Telegram advances the server-side offset only when a subsequent `getUpdates` request carries a higher `offset` (standard Telegram Bot API behavior). Restart initializes from the last *persisted* offset, so a crash between `offset queued` and the actual write can permit Telegram redelivery of an already-spooled update — the drain's idempotency, not the offset, is what stands between that redelivery and double processing.
+- If the state directory is ephemeral (wiped container volume, fresh state dir on restart), both the queue table and the saved offset are lost. Updates acknowledged server-side after the last successful poll are then gone from OpenClaw's perspective. Use a persistent state directory when inbound durability matters.
 
 ### What this means for extensions
 
