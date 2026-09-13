@@ -16,7 +16,7 @@ const DEFAULT_THROTTLE_MS = 1000;
 type SlackDraftStream = {
   update: (update: SlackDraftStreamUpdate) => void;
   flush: () => Promise<void>;
-  clear: (options?: { preserveDetached?: boolean }) => Promise<void>;
+  clear: (options?: { preserveHumanReplies?: boolean }) => Promise<void>;
   discardPending: () => Promise<void>;
   seal: () => Promise<void>;
   forceNewMessage: () => void;
@@ -33,7 +33,7 @@ type SlackDraftStreamUpdate =
       blocks?: (Block | KnownBlock)[];
     };
 
-type SlackDraftMessage = { channelId: string; messageId: string };
+type SlackDraftMessage = { channelId: string; messageId: string; detachedByHuman?: boolean };
 
 export function createSlackDraftStream(params: {
   target: string;
@@ -110,7 +110,7 @@ export function createSlackDraftStream(params: {
             teamId: params.eventScope?.teamId,
             channelId: params.conversationChannelId,
             threadTs,
-            onInterveningMessage: () => forceNewMessage(false),
+            onInterveningMessage: () => forceNewMessage("human"),
           })
         : undefined;
       untrackConversationBoundary = pendingBoundary?.stop;
@@ -142,7 +142,7 @@ export function createSlackDraftStream(params: {
           channelId: streamMessage.channelId,
           threadTs,
           messageTs: streamMessage.messageId,
-          onInterveningMessage: () => forceNewMessage(false),
+          onInterveningMessage: () => forceNewMessage("human"),
         });
         untrackConversationBoundary = tracker.stop;
       }
@@ -167,7 +167,7 @@ export function createSlackDraftStream(params: {
     untrackConversationBoundary = undefined;
   };
 
-  const dropDetachedMessages = (preserve?: ReadonlySet<SlackDraftMessage>) => {
+  const dropDetachedMessages = (preserveHumanReplies = false) => {
     cleanupTail = cleanupTail.then(async () => {
       // Retain failures for retry without letting one stale preview block the rest.
       for (let index = 0; index < pendingCleanupMessages.length;) {
@@ -175,8 +175,10 @@ export function createSlackDraftStream(params: {
         if (!message) {
           return;
         }
-        if (preserve?.has(message)) {
-          index += 1;
+        if (preserveHumanReplies && message.detachedByHuman) {
+          // A confirmed reply releases human conversation context from this
+          // draft's cleanup custody, including later queued turns.
+          pendingCleanupMessages.splice(index, 1);
           continue;
         }
         try {
@@ -202,31 +204,31 @@ export function createSlackDraftStream(params: {
     stopTrackingConversationBoundary();
   };
 
-  const clear = async (options?: { preserveDetached?: boolean }) => {
-    // Alternate final delivery retires only the active preview. A detached
-    // preview may be conversation context that a person already replied to.
+  const clear = async (options?: { preserveHumanReplies?: boolean }) => {
+    // Final delivery preserves human-replied context, while failed active
+    // deletions and explicit rotations remain eligible for cleanup.
     await discardPendingAndStopTracking();
-    const preserve = options?.preserveDetached ? new Set(pendingCleanupMessages) : undefined;
     if (streamMessage) {
       pendingCleanupMessages.push(streamMessage);
       streamMessage = undefined;
     }
     lastVisibleUpdate = undefined;
     lastSentKey = "";
-    await dropDetachedMessages(preserve);
+    await dropDetachedMessages(options?.preserveHumanReplies);
   };
 
-  const forceNewMessage = (resume = true) => {
+  const forceNewMessage = (reason: "turn" | "human" = "turn") => {
     stopTrackingConversationBoundary();
     // Human boundaries change the target without reopening a stream that is
     // closing. Only explicit admission of another turn resumes delivery.
-    if (resume) {
+    if (reason === "turn") {
       streamState.stopped = false;
     }
     streamState.final = false;
     if (streamMessage && !finalizedMessageIds.has(streamMessage.messageId)) {
-      // A card abandoned below a newer human message is unreachable through
-      // finalize/clear and would otherwise linger in its Working state.
+      // Record the human boundary here; failed deletions and explicit turn
+      // rotations must not acquire the same preservation policy.
+      streamMessage.detachedByHuman = reason === "human";
       pendingCleanupMessages.push(streamMessage);
     }
     streamMessage = undefined;

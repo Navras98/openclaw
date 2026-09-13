@@ -466,7 +466,7 @@ describe("createSlackDraftStream", () => {
       stream.update("_checking the original request_");
       const flushing = stream.flush();
       await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
-      const clearing = stream.clear({ preserveDetached: true });
+      const clearing = stream.clear({ preserveHumanReplies: true });
       if (humanReply) {
         noteSlackDraftConversationMessage({
           accountId,
@@ -493,6 +493,57 @@ describe("createSlackDraftStream", () => {
       }
     },
   );
+
+  it("releases human context while retrying failed and explicitly rotated previews", async () => {
+    const accountId = "selective-final-cleanup";
+    const visible = new Map<string, string>();
+    const ids = ["100.100", "100.300", "100.500", "100.700", "100.900"];
+    let nextId = 0;
+    let failFirstDelete = true;
+    const send = vi.fn<DraftSendFn>(async (_target, text) => {
+      const id = ids[nextId++]!;
+      visible.set(id, text);
+      return slackDraftSendResult(id);
+    });
+    const remove = vi.fn<DraftRemoveFn>(async (_channel, id) => {
+      if (id === "100.100" && failFirstDelete) {
+        failFirstDelete = false;
+        throw new Error("temporary delete failure");
+      }
+      visible.delete(id);
+    });
+    const { stream } = createDraftStreamHarness({ accountId, threadTs: "100.000", send, remove });
+
+    stream.update("failed active preview");
+    await stream.flush();
+    await stream.clear();
+    stream.forceNewMessage();
+    stream.update("explicitly rotated preview");
+    await stream.flush();
+    stream.forceNewMessage();
+    stream.update("human conversation context");
+    await stream.flush();
+    noteSlackDraftConversationMessage({
+      accountId,
+      channelId: "C123",
+      threadTs: "100.000",
+      messageTs: "100.600",
+      userId: "U_OWNER",
+    });
+    stream.update("active preview before final");
+    await stream.flush();
+    await stream.clear({ preserveHumanReplies: true });
+
+    expect([...visible.values()]).toEqual(["human conversation context"]);
+    expect(remove.mock.calls.filter(([, id]) => id === "100.100")).toHaveLength(2);
+    stream.forceNewMessage();
+    stream.update("later silent preview");
+    await stream.flush();
+    await stream.clear();
+    await stream.dropDetachedMessages();
+    expect([...visible.values()]).toEqual(["human conversation context"]);
+    expect(remove.mock.calls.some(([, id]) => id === "100.500")).toBe(false);
+  });
 
   it("keeps direct-message previews after the latest unthreaded human message", async () => {
     const accountId = "unthreaded-direct-message";

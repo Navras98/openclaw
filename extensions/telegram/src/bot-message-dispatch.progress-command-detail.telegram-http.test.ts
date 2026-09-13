@@ -233,6 +233,43 @@ describe("Telegram progress command detail through the shared dispatcher and Tel
       .map((call) => [call.method, call.fields.message_id ?? null, call.fields.text] as const);
   }
 
+  it.each([false, true])(
+    "keeps tool progress until the final answer replaces it (assistant boundary: %s)",
+    async (assistantBoundary) => {
+      const finalText = "The requested result.";
+      let progressMessageId: number | undefined;
+      await dispatchProgressTurn(
+        async (options) => {
+          await options?.onToolStart?.({ name: "exec", phase: "start", toolCallId: "first" });
+          await waitForBotApiCall(
+            (call) => call.method === "sendMessage" && String(call.fields.text).includes("Exec"),
+          );
+          progressMessageId = [...visibleMessages.keys()][0];
+          if (assistantBoundary) {
+            await options?.onAssistantMessageStart?.();
+          }
+          expect([...visibleMessages.values()]).toEqual([expect.stringContaining("Exec")]);
+          expect(calls.some((call) => call.method === "deleteMessage")).toBe(false);
+        },
+        { mode: "partial", toolProgress: true, finalReply: { text: finalText } },
+      );
+
+      await expect
+        .poll(() => [...visibleMessages.values()], { timeout: 5_000 })
+        .toEqual([finalText]);
+      const finalMessageId = [...visibleMessages.keys()][0];
+      expect(finalMessageId).not.toBe(progressMessageId);
+      expect(
+        calls.filter((call) => call.method === "sendMessage" && call.fields.text === finalText),
+      ).toHaveLength(1);
+      expect(
+        calls
+          .filter((call) => call.method === "deleteMessage")
+          .map((call) => Number(call.fields.message_id)),
+      ).toEqual([progressMessageId]);
+    },
+  );
+
   it("retires unaccepted pre-tool text across a tool-only assistant message", async () => {
     const preamble = "I will inspect the files before answering.";
     const finalText = "The requested result.";

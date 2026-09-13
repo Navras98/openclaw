@@ -4243,20 +4243,33 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
   });
 
   it.each([
-    { humanReply: false, messageToolReply: false, delayedReceipt: false },
-    { humanReply: true, messageToolReply: false, delayedReceipt: false },
-    { humanReply: false, messageToolReply: true, delayedReceipt: false },
-    { humanReply: true, messageToolReply: true, delayedReceipt: false },
-    { humanReply: false, messageToolReply: true, delayedReceipt: true },
-    { humanReply: true, messageToolReply: true, delayedReceipt: true },
+    { humanReply: false, messageToolReply: false, delayedReceipt: false, fallback: "none" },
+    { humanReply: true, messageToolReply: false, delayedReceipt: false, fallback: "none" },
+    { humanReply: false, messageToolReply: true, delayedReceipt: false, fallback: "none" },
+    { humanReply: true, messageToolReply: true, delayedReceipt: false, fallback: "none" },
+    { humanReply: false, messageToolReply: true, delayedReceipt: true, fallback: "none" },
+    { humanReply: true, messageToolReply: true, delayedReceipt: true, fallback: "none" },
+    { humanReply: true, messageToolReply: false, delayedReceipt: false, fallback: "identity" },
+    { humanReply: true, messageToolReply: false, delayedReceipt: false, fallback: "media" },
+    { humanReply: true, messageToolReply: false, delayedReceipt: false, fallback: "error" },
+    { humanReply: true, messageToolReply: false, delayedReceipt: false, fallback: "tts" },
   ])(
-    "retains a pre-tool preview only after a human replied to it (human=$humanReply, message tool=$messageToolReply, delayed receipt=$delayedReceipt)",
-    async ({ humanReply, messageToolReply, delayedReceipt }) => {
+    "retains a pre-tool preview only after a human replied to it (human=$humanReply, message tool=$messageToolReply, delayed receipt=$delayedReceipt, fallback=$fallback)",
+    async ({ humanReply, messageToolReply, delayedReceipt, fallback }) => {
       mockedSlackStreamingMode = "partial";
       mockedSlackDraftMode = "replace";
-      mockedDispatchSequence = messageToolReply
-        ? []
-        : [{ kind: "final", payload: { text: FINAL_REPLY_TEXT } }];
+      let finalPayload: TestReplyPayload = { text: FINAL_REPLY_TEXT };
+      if (fallback === "media") {
+        finalPayload.mediaUrl = "https://example.com/result.png";
+      } else if (fallback === "error") {
+        finalPayload.isError = true;
+      } else if (fallback === "tts") {
+        finalPayload = {
+          mediaUrl: "https://example.com/result.mp3",
+          ttsSupplement: { spokenText: FINAL_REPLY_TEXT },
+        };
+      }
+      mockedDispatchSequence = messageToolReply ? [] : [{ kind: "final", payload: finalPayload }];
       mockedSourceReplyDelivered = messageToolReply;
       const { createMessageReceiptFromOutboundResults } =
         await import("openclaw/plugin-sdk/channel-outbound");
@@ -4317,7 +4330,17 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
           return draftStream;
         },
       );
+      if (fallback !== "none") {
+        deliverRepliesMock.mockImplementationOnce(async ({ replies }) => {
+          expect(replies[0]?.text).toBe(FINAL_REPLY_TEXT);
+          visibleMessages.set("normal-final", FINAL_REPLY_TEXT);
+          return { channelId: "C123", messageId: "normal-final" };
+        });
+      }
       finalizeSlackPreviewEditMock.mockImplementationOnce(async (input) => {
+        if (fallback === "tts") {
+          throw new Error("preview edit failed");
+        }
         const edit = requireRecord(input, "final preview edit");
         visibleMessages.set(String(edit.messageId), String(edit.text));
       });
@@ -4343,9 +4366,27 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
         },
         { kind: "assistant_start" },
         ...(messageToolReply ? [] : [{ kind: "partial" as const, text: FINAL_REPLY_TEXT }]),
+        ...(fallback === "none"
+          ? []
+          : [
+              {
+                kind: "checkpoint" as const,
+                run: async () => {
+                  await draftStream?.flush();
+                  expect([...visibleMessages.values()]).toEqual([
+                    "I will inspect the files.",
+                    FINAL_REPLY_TEXT,
+                  ]);
+                },
+              },
+            ]),
       ];
 
-      const dispatching = dispatchPreparedSlackMessage(createPreparedSlackMessage({}));
+      const dispatching = dispatchPreparedSlackMessage(
+        createPreparedSlackMessage(
+          fallback === "identity" ? { relayIdentity: { username: "Fixture Assistant" } } : {},
+        ),
+      );
       if (delayedReceipt) {
         await vi.waitFor(() => expect(closeoutStarted).toBe(true));
         if (humanReply) {
