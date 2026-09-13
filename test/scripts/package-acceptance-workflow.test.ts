@@ -73,6 +73,21 @@ const FULL_RELEASE_ARTIFACTS_WORKFLOW = ".github/workflows/full-release-artifact
 const ACTIONS_CACHE_V6 = "actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9";
 const CI_WORKFLOW = ".github/workflows/ci.yml";
 const PERFORMANCE_WORKFLOW = ".github/workflows/openclaw-performance.yml";
+const PUBLICATION_CONTRACT_FILES = [
+  "scripts/full-release-publication-contract.mjs",
+  "scripts/clawhub-prepared-artifact.mjs",
+  "scripts/clawhub-parent-authorization.mjs",
+  "scripts/plugin-publication-artifact.mjs",
+  "scripts/release-tooling-identity.mjs",
+  "scripts/lib/actions-artifact-archive.mjs",
+  "scripts/lib/arg-utils.runtime.mjs",
+  "scripts/lib/bounded-response.mjs",
+  "scripts/lib/canonical-json.mjs",
+  "scripts/lib/npm-core-release-packages.json",
+  "scripts/lib/npm-publish-plan.mjs",
+  "scripts/lib/record-shared.mjs",
+  "scripts/lib/release-version.mjs",
+];
 const FULL_RELEASE_CHILD_DISPATCHES = [
   {
     jobName: "normal_ci",
@@ -2967,7 +2982,7 @@ function runReleaseChecksInputValidation(
   );
   const fixture = frozenWorkflowFixture(RELEASE_CHECKS_WORKFLOW, "resolve_target", {}, {}, {}, [
     "scripts/full-release-validation-policy.mjs",
-    "scripts/full-release-publication-contract.mjs",
+    ...PUBLICATION_CONTRACT_FILES,
     "scripts/lib/release-changelog.mjs",
     "scripts/full-release-candidate-contract.mjs",
     "scripts/lib/cross-os-release-checks/suite-filter.mjs",
@@ -13774,6 +13789,16 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       "sparse-checkout": "scripts",
     });
     expect(validateManifest.env).toMatchObject({
+      PUBLICATION_CONSUMER:
+        "${{ inputs.publish_docker_only && !inputs.publish_openclaw_npm && 'docker-only' || 'publisher' }}",
+      PUBLISH_DOCKER_ONLY: "${{ inputs.publish_docker_only }}",
+      PUBLISH_OPENCLAW_NPM: "${{ inputs.publish_openclaw_npm }}",
+      RELEASE_NPM_DIST_TAG: "${{ inputs.npm_dist_tag }}",
+      PLUGIN_PUBLISH_SCOPE: "${{ inputs.plugin_publish_scope }}",
+      RELEASE_PLUGINS: "${{ inputs.plugins }}",
+      PREPARED_PLUGINS: "${{ inputs.prepared_plugins }}",
+      WINDOWS_NODE_TAG: "${{ inputs.windows_node_tag }}",
+      WINDOWS_NODE_INSTALLER_DIGESTS: "${{ inputs.windows_node_installer_digests }}",
       RUN_JSON_FILE: "${{ runner.temp }}/full-release-validation-run.json",
       TRUSTED_WORKFLOW_FULL_REF: "${{ github.ref }}",
       TRUSTED_WORKFLOW_REF: "${{ github.ref_name }}",
@@ -13784,6 +13809,12 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     });
     expect(validateManifest.run).toContain('MANIFEST_FILE="$manifest"');
     expect(validateManifest.run).toContain('node "$VALIDATOR_FILE" < "$RUN_JSON_FILE"');
+    expect(validateManifest.run).not.toContain('node "$STRICT_VALIDATOR_FILE"');
+    expect(npmFullRun.env).toMatchObject({
+      PUBLICATION_CONSUMER: "core-npm",
+      RELEASE_NPM_DIST_TAG: "${{ inputs.npm_dist_tag }}",
+    });
+    expect(npmFullRun.run).not.toContain('node "$STRICT_VALIDATOR_FILE"');
     expect(publishDownload.with?.name).toBe(
       "full-release-validation-${{ inputs.full_release_validation_run_id }}-${{ needs.resolve_release_target.outputs.full_release_validation_run_attempt }}",
     );
@@ -13840,7 +13871,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     for (const source of [
       "scripts/release-ci-summary.mjs",
       "scripts/full-release-validation-policy.mjs",
-      "scripts/full-release-publication-contract.mjs",
+      ...PUBLICATION_CONTRACT_FILES,
       "scripts/lib/release-changelog.mjs",
       "scripts/full-release-candidate-contract.mjs",
       "scripts/lib/canonical-json.mjs",
