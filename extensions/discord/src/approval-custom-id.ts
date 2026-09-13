@@ -3,15 +3,7 @@ import { buildApprovalResolutionRef } from "openclaw/plugin-sdk/approval-referen
 import type { MessagePresentationAction } from "openclaw/plugin-sdk/interactive-runtime";
 import type { ComponentData } from "./internal/discord.js";
 
-const DISCORD_APPROVAL_KINDS = ["exec", "plugin", "system-agent"] as const;
-type DiscordApprovalKind = (typeof DISCORD_APPROVAL_KINDS)[number];
-
 type DiscordApprovalAction = Extract<MessagePresentationAction, { type: "approval" }>;
-
-function isDiscordApprovalKind(value: string): value is DiscordApprovalKind {
-  // SAFETY: includes() accepts any string; the tuple contents never change.
-  return (DISCORD_APPROVAL_KINDS as readonly string[]).includes(value);
-}
 
 const DISCORD_APPROVAL_CUSTOM_ID_MAX_CHARS = 100;
 
@@ -42,7 +34,9 @@ function encodeBoundedDiscordApprovalCustomId(action: DiscordApprovalAction): st
 export function buildDiscordApprovalCustomId(action: DiscordApprovalAction): string | undefined {
   if (
     !action.approvalId ||
-    !isDiscordApprovalKind(action.approvalKind) ||
+    (action.approvalKind !== "exec" &&
+      action.approvalKind !== "plugin" &&
+      action.approvalKind !== "system-agent") ||
     (action.decision !== "allow-once" &&
       action.decision !== "allow-always" &&
       action.decision !== "deny")
@@ -86,7 +80,11 @@ export function parseExecApprovalData(data: ComponentData): {
   const rawId = coerce(data.id);
   const rawKind = coerce(data.kind);
   const rawAction = coerce(data.action);
-  if (!rawId || !isDiscordApprovalKind(rawKind) || !rawAction) {
+  if (
+    !rawId ||
+    (rawKind !== "exec" && rawKind !== "plugin" && rawKind !== "system-agent") ||
+    !rawAction
+  ) {
     return null;
   }
   if (rawAction !== "allow-once" && rawAction !== "allow-always" && rawAction !== "deny") {

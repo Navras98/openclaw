@@ -8,14 +8,6 @@ export const SLACK_APPROVAL_HEADER_BLOCK_ID = "openclaw_approval_header";
 
 export type SlackApprovalAction = Extract<MessagePresentationAction, { type: "approval" }>;
 
-const SLACK_APPROVAL_KINDS = ["exec", "plugin", "system-agent"] as const;
-type SlackApprovalKind = (typeof SLACK_APPROVAL_KINDS)[number];
-
-function isSlackApprovalKind(value: unknown): value is SlackApprovalKind {
-  // SAFETY: includes() accepts any string; the tuple contents never change.
-  return typeof value === "string" && (SLACK_APPROVAL_KINDS as readonly string[]).includes(value);
-}
-
 function isApprovalDecision(value: unknown): value is SlackApprovalAction["decision"] {
   return value === "allow-once" || value === "allow-always" || value === "deny";
 }
@@ -54,7 +46,9 @@ export function decodeSlackApprovalAction(value: unknown): SlackApprovalAction |
       Object.keys(record).length !== 3 ||
       typeof record.approvalId !== "string" ||
       record.approvalId.length === 0 ||
-      !isSlackApprovalKind(record.approvalKind) ||
+      (record.approvalKind !== "exec" &&
+        record.approvalKind !== "plugin" &&
+        record.approvalKind !== "system-agent") ||
       !isApprovalDecision(record.decision)
     ) {
       return null;
