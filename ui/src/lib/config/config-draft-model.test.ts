@@ -948,7 +948,7 @@ describe("config draft model", () => {
       expect(runtimeConfig.state.configFormDirty).toBe(false);
       expect(runtimeConfig.state.configAutoSaveStatus).toBe("conflict");
 
-      await runtimeConfig.refresh({ discardPendingChanges: true });
+      await runtimeConfig.discardDraft({ reloadOnly: true });
       expect(runtimeConfig.state.configAutoSaveStatus).toBe("idle");
       runtimeConfig.dispose();
     },
@@ -965,6 +965,10 @@ describe("config draft model", () => {
 
     publish(false);
     runtimeConfig.setRaw('{\n  "count": 9\n}\n');
+    expect(runtimeConfig.state.configFormDirty).toBe(true);
+
+    await runtimeConfig.discardDraft({ reloadOnly: true });
+    expect(runtimeConfig.state.configRaw).toBe('{\n  "count": 9\n}\n');
     expect(runtimeConfig.state.configFormDirty).toBe(true);
 
     await runtimeConfig.discardDraft();
