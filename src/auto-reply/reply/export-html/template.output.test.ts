@@ -5,7 +5,7 @@ import {
   renderTemplate,
   requireElement,
   type SessionEntry,
-} from "./test-helpers/template.js";
+} from "../../../../test/helpers/export-html-template.js";
 
 describe("export html tool output lines", () => {
   it.each([

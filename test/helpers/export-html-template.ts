@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
 import { expectDefined } from "@openclaw/normalization-core";
-import { generateExportHtmlVendorAssets } from "../../../../../scripts/runtime-postbuild.mts";
+import { generateExportHtmlVendorAssets } from "../../scripts/runtime-postbuild.mts";
 
 export type SessionEntry = {
   id: string;
@@ -39,7 +39,10 @@ type LinkedomModule = {
 
 const LINKEDOM_MODULE = "linkedom";
 
-const exportHtmlDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const exportHtmlDir = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../../src/auto-reply/reply/export-html",
+);
 export const templateHtml = fs.readFileSync(path.join(exportHtmlDir, "template.html"), "utf8");
 export const templateCss = fs.readFileSync(path.join(exportHtmlDir, "template.css"), "utf8");
 const templateJs = fs.readFileSync(path.join(exportHtmlDir, "template.js"), "utf8");

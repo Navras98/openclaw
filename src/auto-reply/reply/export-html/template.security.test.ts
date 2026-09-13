@@ -9,7 +9,7 @@ import {
   type SessionEntry,
   templateCss,
   templateHtml,
-} from "./test-helpers/template.js";
+} from "../../../../test/helpers/export-html-template.js";
 
 function selectorSpecificity(selector: string): [number, number, number] {
   const ids = selector.match(/#[\w-]+/g)?.length ?? 0;
