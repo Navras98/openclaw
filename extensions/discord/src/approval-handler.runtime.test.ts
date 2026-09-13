@@ -1,5 +1,7 @@
 // Discord tests cover approval handler plugin behavior.
-import { describe, expect, it } from "vitest";
+import assert from "node:assert/strict";
+import { createChannelApprovalHandlerFromCapability } from "openclaw/plugin-sdk/approval-handler-runtime";
+import { describe, expect, it, vi } from "vitest";
 import { parseExecApprovalData } from "./approval-custom-id.js";
 import { discordApprovalNativeRuntime } from "./approval-handler.runtime.js";
 import { parseCustomId } from "./internal/discord.js";
@@ -144,15 +146,30 @@ describe("discordApprovalNativeRuntime", () => {
     );
   });
 
-  it("round-trips system-agent approval buttons through the callback codec", async () => {
-    const pending = await discordApprovalNativeRuntime.presentation.buildPendingPayload({
-      cfg: {} as never,
+  it("round-trips system-agent buttons emitted by the native approval handler", async () => {
+    const buildPendingPayload = vi.fn(
+      discordApprovalNativeRuntime.presentation.buildPendingPayload,
+    );
+    const handler = await createChannelApprovalHandlerFromCapability({
+      label: "discord/approval-test",
+      clientDisplayName: "Discord approval test",
+      channel: "discord",
+      channelLabel: "Discord",
+      cfg: {},
       accountId: "main",
-      context: {
-        token: "discord-token",
-        config: {} as never,
+      context: { token: "discord-token", config: {} },
+      nowMs: () => 0,
+      capability: {
+        nativeRuntime: {
+          ...discordApprovalNativeRuntime,
+          availability: { isConfigured: () => true, shouldHandle: () => true },
+          presentation: { ...discordApprovalNativeRuntime.presentation, buildPendingPayload },
+        },
       },
-      request: {
+    });
+    assert(handler);
+    try {
+      await handler.handleRequested({
         id: "change-1",
         request: {
           title: "Apply proposed change",
@@ -164,67 +181,23 @@ describe("discordApprovalNativeRuntime", () => {
         },
         createdAtMs: 0,
         expiresAtMs: 1_000,
-      },
-      approvalKind: "system-agent",
-      nowMs: 0,
-      view: {
-        approvalKind: "system-agent",
-        phase: "pending",
-        approvalId: "change-1",
-        title: "OpenClaw change requires approval",
-        description: "Rewrite the scheduler.",
-        commandText: "Rewrite the scheduler.",
-        commandPreview: "Rewrite the scheduler.",
-        operationSummary: "Rewrite the scheduler.",
-        cwd: null,
-        host: "gateway",
-        nodeId: null,
-        sessionKey: "session-1",
-        metadata: [],
-        expiresAtMs: 1_000,
-        actions: [
-          {
-            label: "Allow Once",
-            decision: "allow-once",
-            style: "success",
-            command: "/approve change-1 allow-once",
-            action: {
-              type: "approval",
-              approvalId: "change-1",
-              approvalKind: "system-agent",
-              decision: "allow-once",
-            },
-          },
-          {
-            label: "Deny",
-            decision: "deny",
-            style: "danger",
-            command: "/approve change-1 deny",
-            action: {
-              type: "approval",
-              approvalId: "change-1",
-              approvalKind: "system-agent",
-              decision: "deny",
-            },
-          },
-        ],
-      },
-    });
-    const payload = JSON.stringify(pending);
-    expect(payload).toContain("execapproval:kind=system-agent;id=change-1;action=allow-once");
-    expect(payload).toContain("execapproval:kind=system-agent;id=change-1;action=deny");
-    expect(payload).not.toContain("action=allow-always");
-    // The emitted system-agent custom id must survive the callback codec used by
-    // the interaction path; otherwise the card renders but its buttons die on click.
-    expect(
-      parseExecApprovalData(
-        parseCustomId("execapproval:kind=system-agent;id=change-1;action=allow-once").data,
-      ),
-    ).toEqual({
-      approvalId: "change-1",
-      approvalKind: "system-agent",
-      action: "allow-once",
-    });
+      });
+      expect(buildPendingPayload).toHaveBeenCalledOnce();
+      const pending = await buildPendingPayload.mock.results[0]?.value;
+      const customIds: string[] = [];
+      JSON.stringify(pending, (key, value: unknown) => {
+        if (key === "custom_id" && typeof value === "string") {
+          customIds.push(value);
+        }
+        return value;
+      });
+      expect(customIds.map((id) => parseExecApprovalData(parseCustomId(id).data))).toEqual([
+        { approvalId: "change-1", approvalKind: "system-agent", action: "allow-once" },
+        { approvalId: "change-1", approvalKind: "system-agent", action: "deny" },
+      ]);
+    } finally {
+      await handler.stop();
+    }
   });
 
   it.each([
