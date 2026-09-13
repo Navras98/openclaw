@@ -19,6 +19,7 @@ export async function waitForReliabilityWorkerMessage<Message = unknown>(params:
     }, params.timeoutMs);
     const onError = (error: unknown) => {
       cleanup();
+      // oxlint-disable-next-line typescript/prefer-promise-reject-errors -- Preserve the worker, action, or matcher's original rejection value.
       reject(error);
     };
     const onMessage = (message: Message) => {

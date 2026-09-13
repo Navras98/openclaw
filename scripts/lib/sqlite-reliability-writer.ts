@@ -90,7 +90,7 @@ export async function waitForWriterMessage<T extends WriterMessage["kind"]>(
   kind: T,
   action?: () => void,
 ): Promise<Extract<WriterMessage, { kind: T }>> {
-  const message = await waitForReliabilityWorkerMessage({
+  const result = await waitForReliabilityWorkerMessage({
     action,
     child: writer.child,
     matches: (message: WriterMessage) => {
@@ -105,7 +105,7 @@ export async function waitForWriterMessage<T extends WriterMessage["kind"]>(
     exitMessage: (code, signal) =>
       `SQLite reliability writer exited before ${kind}: code=${String(code)} signal=${String(signal)}.${formatReliabilityStderr(writer.stderr.join(""))}`,
   });
-  return message as Extract<WriterMessage, { kind: T }>;
+  return result as Extract<WriterMessage, { kind: T }>;
 }
 
 export async function stopWriter(writer: WriterHandle): Promise<WriterResultMessage> {
