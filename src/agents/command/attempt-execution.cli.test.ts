@@ -876,6 +876,7 @@ describe("CLI attempt execution", () => {
     body: string;
     runId: string;
     cwd?: string;
+    abortSignal?: AbortSignal;
     onExecutionStarted?: () => void;
     onAgentEvent?: RunAgentAttemptParams["onAgentEvent"];
     classifyResult?: RunAgentAttemptParams["classifyResult"];
@@ -890,7 +891,10 @@ describe("CLI attempt execution", () => {
       body: params.body,
       classifyResult: params.classifyResult,
       runId: params.runId,
-      opts: { onExecutionStarted: params.onExecutionStarted },
+      opts: {
+        onExecutionStarted: params.onExecutionStarted,
+        abortSignal: params.abortSignal,
+      },
       ...(params.onAgentEvent ? { onAgentEvent: params.onAgentEvent } : {}),
       agentDir,
       sessionStore: params.sessionStore,
@@ -1565,6 +1569,90 @@ describe("CLI attempt execution", () => {
     expect(runCliAgentMock).toHaveBeenCalledTimes(2);
     expect(firstRunCliAgentArg(1).cliSessionId).toBe(cliSessionId);
   });
+
+  it.each([
+    { reason: "aborted", replacement: false },
+    { reason: "timeout", replacement: false },
+    { reason: "aborted", replacement: true },
+    { reason: "timeout", replacement: true },
+  ] as const)(
+    "settles returned $reason partial output with replacement=$replacement before the next turn",
+    async ({ reason, replacement }) => {
+      const sessionKey = "agent:main:direct:cli-partial-interruption";
+      const cliSessionId = "established-session";
+      const successorCliSessionId = "unfinished-successor";
+      const homeDir = path.join(tmpDir, "home");
+      await writeClaudeCliAssistantTranscript(cliSessionId, homeDir);
+      await writeClaudeCliAssistantTranscript(successorCliSessionId, homeDir);
+      const sessionEntry = makeClaudeCliSessionEntry("session-partial-interruption", cliSessionId);
+      if (replacement) {
+        sessionEntry.cliSessionBindings!["claude-cli"]!.forkNextResume = true;
+      }
+      const sessionStore = { [sessionKey]: sessionEntry };
+      await writeSessionStoreSeed(sessionStore);
+      const controller = new AbortController();
+      runCliAgentMock.mockImplementationOnce(async (runParams: RunCliAgentParams) => {
+        expect(runParams.cliSessionId).toBe(cliSessionId);
+        if (replacement) {
+          expect(await runParams.claimCliSessionFork?.()).toBe(true);
+          await runParams.persistCliSessionForkSuccessor?.(successorCliSessionId);
+          expect(readSessionStore()[sessionKey]?.cliSessionBindings?.["claude-cli"]).toMatchObject({
+            sessionId: successorCliSessionId,
+            forceReuse: true,
+          });
+        }
+        controller.abort(
+          new DOMException(reason, reason === "timeout" ? "TimeoutError" : "AbortError"),
+        );
+        expect(runParams.abortSignal?.aborted).toBe(true);
+        const context = buildPreparedCliRunContext({
+          provider: "claude-cli",
+          sessionId: sessionEntry.sessionId,
+          sessionKey,
+          workspaceDir: tmpDir,
+        });
+        context.reusableCliSession = { mode: "reuse", sessionId: cliSessionId };
+        return buildCliRunResult({
+          context,
+          output: { text: "partial reply", terminalInterruption: { reason } },
+          effectiveCliSessionId: replacement ? successorCliSessionId : cliSessionId,
+          bindingFlushOk: true,
+          usedHistoryPrompt: false,
+          userTurnHandled: true,
+          sessionBindingDisabled: false,
+          preparedContextAgentMeta: {},
+        });
+      });
+
+      await runClaudeCliAttempt({
+        sessionKey,
+        sessionEntry,
+        sessionStore,
+        body: "continue the conversation",
+        runId: "run-partial-interruption",
+        abortSignal: controller.signal,
+      });
+
+      const expectedSessionId = replacement ? undefined : cliSessionId;
+      const persisted = readSessionStore()[sessionKey];
+      expect.soft(persisted?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe(expectedSessionId);
+      expect.soft(persisted?.cliSessionBindings?.["claude-cli"]?.forceReuse).toBeUndefined();
+      expect
+        .soft(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]?.sessionId)
+        .toBe(expectedSessionId);
+      runCliAgentMock.mockResolvedValueOnce(makeCliResult("continued after interruption"));
+      await runClaudeCliAttempt({
+        sessionKey,
+        sessionEntry: sessionStore[sessionKey],
+        sessionStore,
+        body: "continue",
+        runId: "run-after-partial-interruption",
+      });
+
+      expect(runCliAgentMock).toHaveBeenCalledTimes(2);
+      expect(firstRunCliAgentArg(1).cliSessionId).toBe(expectedSessionId);
+    },
+  );
 
   it("clears a fork-marked Claude CLI session after terminal failover", async () => {
     const sessionKey = "agent:main:direct:cli-fork-expired";
