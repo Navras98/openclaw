@@ -14,6 +14,7 @@ import {
   resolveCliRuntimeOwnerFingerprint,
 } from "../cli-auth-epoch.js";
 import type { CliOutput, CliTerminalInterruption } from "../cli-output-contracts.js";
+import { shouldClearInterruptedCliSessionBinding } from "../cli-session.js";
 import { claudeCliSessionTranscriptHasContent as claudeCliSessionTranscriptHasContentImpl } from "../command/attempt-execution.helpers.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent-runner.js";
 import { resolveExplicitFinalSourceReplyDeliveryEvidence } from "../embedded-agent-runner/delivery-evidence.js";
@@ -508,8 +509,11 @@ export function buildCliRunResult(params: {
   const cliSessionBindingCleared =
     sessionBindingDisabled ||
     unflushedCliSessionId !== undefined ||
-    (terminalInterruption !== undefined &&
-      effectiveCliSessionId !== resolveCliSessionId(context.reusableCliSession));
+    shouldClearInterruptedCliSessionBinding({
+      interrupted: terminalInterruption !== undefined,
+      bindingReplacedDuringRun:
+        effectiveCliSessionId !== resolveCliSessionId(context.reusableCliSession),
+    });
   const persistedCliSessionId = cliSessionBindingCleared ? undefined : effectiveCliSessionId;
   const createdReseedReceipt =
     persistedCliSessionId &&
