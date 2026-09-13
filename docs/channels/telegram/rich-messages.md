@@ -81,7 +81,9 @@ Rich Telegram surfaces: formatted messages, inline keyboards, agent message acti
     `ask_user` uses these native controls for one single-select question.
     Choices use one row each, and **Other…** opens Telegram's reply input.
 
-    Message action example:
+    Message action example (invoked through the core `message` tool, routed with `channel: "telegram"`):
+
+    The `message` tool is policy-dependent: it appears only in agents whose profile and reply mode include it (see the tool policy in `src/agents/agent-tools.ts` — visible-replies mode, profile allowlist, explicit omit). If your agent's tool list has no `message` tool, these payloads cannot be sent from that agent — check the agent profile and `alsoAllow` instead of guessing the tool name. Button rendering additionally requires the `inlineButtons` scope above and the `sendMessage` action gate documented under "Telegram message actions for agents and automation".
 
 ```json5
 {
