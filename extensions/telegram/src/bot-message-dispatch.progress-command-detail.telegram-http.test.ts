@@ -43,7 +43,7 @@ describe("Telegram progress command detail through the shared dispatcher and Tel
         if (method === "sendMessage" || method === "editMessageText") {
           const messageId =
             typeof fields.message_id === "number" ? fields.message_id : ++nextMessageId;
-          visibleMessages.set(messageId, String(fields.text ?? ""));
+          visibleMessages.set(messageId, typeof fields.text === "string" ? fields.text : "");
           response.end(
             JSON.stringify({
               ok: true,
@@ -243,6 +243,9 @@ describe("Telegram progress command detail through the shared dispatcher and Tel
           (call) => call.method === "sendMessage" && call.fields.text === preamble,
         );
         await options?.onToolStart?.({ name: "exec", phase: "start", toolCallId: "first" });
+        await waitForBotApiCall(
+          (call) => call.method === "sendMessage" && String(call.fields.text).includes("🛠️ Exec"),
+        );
         // An unphased provider can continue with a tool-only assistant message.
         // Its start clears progress suppression without replacing the old preview.
         await options?.onAssistantMessageStart?.();
@@ -277,6 +280,40 @@ describe("Telegram progress command detail through the shared dispatcher and Tel
         .toEqual([finalText]);
     },
   );
+
+  it("retires a lazy partial queued immediately before a quiet tool start", async () => {
+    const preamble = "I will inspect the files before answering.";
+    const finalText = "The provider failed. Please try again.";
+    await dispatchProgressTurn(
+      async (options) => {
+        // Core preserves callback start order, not completion order. The partial
+        // is still queued when the tool callback starts and must retire first.
+        const partial = options?.onPartialReply?.({ text: preamble, delta: preamble });
+        const tool = options?.onToolStart?.({ name: "exec", phase: "start", toolCallId: "first" });
+        await Promise.all([partial, tool]);
+      },
+      { mode: "partial", toolProgress: false, finalReply: { text: finalText, isError: true } },
+    );
+    await expect.poll(() => [...visibleMessages.values()], { timeout: 5_000 }).toEqual([finalText]);
+  });
+
+  it("preserves an interrupted answer when an existing tool only updates", async () => {
+    const answer = "The first result is ready, and the remaining work is still running.";
+    const failure = "The provider failed. Please try again.";
+    await dispatchProgressTurn(
+      async (options) => {
+        await options?.onToolStart?.({ name: "exec", phase: "start", toolCallId: "first" });
+        await options?.onAssistantMessageStart?.();
+        await options?.onPartialReply?.({ text: answer, delta: answer });
+        await waitForBotApiCall(
+          (call) => call.method === "sendMessage" && call.fields.text === answer,
+        );
+        await options?.onToolStart?.({ name: "exec", phase: "update", toolCallId: "first" });
+      },
+      { mode: "partial", toolProgress: false, finalReply: { text: failure, isError: true } },
+    );
+    expect([...visibleMessages.values()]).toEqual([`${answer}\n\n${failure}`]);
+  });
 
   it("keeps the raw command text on the finished progress line instead of the output title", async () => {
     // Same event sequence as the dispatch unit fixture: the exec tool starts with

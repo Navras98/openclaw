@@ -449,6 +449,51 @@ describe("createSlackDraftStream", () => {
     expect(stream.messageId()).toBe("100.300");
   });
 
+  it.each([false, true])(
+    "settles active-only cleanup after a delayed send (human reply: %s)",
+    async (humanReply) => {
+      const accountId = `alternate-final-during-send-${humanReply}`;
+      let resolveReceipt!: (message: ReturnType<typeof slackDraftSendResult>) => void;
+      const receipt = new Promise<ReturnType<typeof slackDraftSendResult>>((resolve) => {
+        resolveReceipt = resolve;
+      });
+      const send = vi.fn<DraftSendFn>(async () => await receipt);
+      const { stream, remove } = createDraftStreamHarness({
+        accountId,
+        threadTs: "100.000",
+        send,
+      });
+      stream.update("_checking the original request_");
+      const flushing = stream.flush();
+      await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
+      const clearing = stream.clear({ preserveDetached: true });
+      if (humanReply) {
+        noteSlackDraftConversationMessage({
+          accountId,
+          channelId: "C123",
+          threadTs: "100.000",
+          messageTs: "100.200",
+          userId: "U_OWNER",
+        });
+      }
+      resolveReceipt(slackDraftSendResult("100.100"));
+      await Promise.all([flushing, clearing]);
+      stream.update("Late preview after final delivery");
+      await stream.flush();
+      expect(send).toHaveBeenCalledOnce();
+      expect(stream.messageId()).toBeUndefined();
+      if (humanReply) {
+        expect(remove).not.toHaveBeenCalled();
+      } else {
+        expect(remove).toHaveBeenCalledWith(
+          "C123",
+          "100.100",
+          expect.objectContaining({ accountId }),
+        );
+      }
+    },
+  );
+
   it("keeps direct-message previews after the latest unthreaded human message", async () => {
     const accountId = "unthreaded-direct-message";
     const send = vi

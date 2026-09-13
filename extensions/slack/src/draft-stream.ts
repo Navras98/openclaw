@@ -16,7 +16,7 @@ const DEFAULT_THROTTLE_MS = 1000;
 type SlackDraftStream = {
   update: (update: SlackDraftStreamUpdate) => void;
   flush: () => Promise<void>;
-  clear: () => Promise<void>;
+  clear: (options?: { preserveDetached?: boolean }) => Promise<void>;
   discardPending: () => Promise<void>;
   seal: () => Promise<void>;
   forceNewMessage: () => void;
@@ -110,7 +110,7 @@ export function createSlackDraftStream(params: {
             teamId: params.eventScope?.teamId,
             channelId: params.conversationChannelId,
             threadTs,
-            onInterveningMessage: forceNewMessage,
+            onInterveningMessage: () => forceNewMessage(false),
           })
         : undefined;
       untrackConversationBoundary = pendingBoundary?.stop;
@@ -142,7 +142,7 @@ export function createSlackDraftStream(params: {
           channelId: streamMessage.channelId,
           threadTs,
           messageTs: streamMessage.messageId,
-          onInterveningMessage: forceNewMessage,
+          onInterveningMessage: () => forceNewMessage(false),
         });
         untrackConversationBoundary = tracker.stop;
       }
@@ -167,13 +167,17 @@ export function createSlackDraftStream(params: {
     untrackConversationBoundary = undefined;
   };
 
-  const dropDetachedMessages = () => {
+  const dropDetachedMessages = (preserve?: ReadonlySet<SlackDraftMessage>) => {
     cleanupTail = cleanupTail.then(async () => {
       // Retain failures for retry without letting one stale preview block the rest.
       for (let index = 0; index < pendingCleanupMessages.length;) {
         const message = pendingCleanupMessages[index];
         if (!message) {
           return;
+        }
+        if (preserve?.has(message)) {
+          index += 1;
+          continue;
         }
         try {
           await remove(message.channelId, message.messageId, {
@@ -191,21 +195,34 @@ export function createSlackDraftStream(params: {
     return cleanupTail;
   };
 
-  const clear = async () => {
-    stopTrackingConversationBoundary();
+  const discardPendingAndStopTracking = async () => {
+    // A human can reply before Slack returns the pending preview's identity.
+    // Reconcile that receipt before removing the conversation boundary tracker.
     await discardPending();
+    stopTrackingConversationBoundary();
+  };
+
+  const clear = async (options?: { preserveDetached?: boolean }) => {
+    // Alternate final delivery retires only the active preview. A detached
+    // preview may be conversation context that a person already replied to.
+    await discardPendingAndStopTracking();
+    const preserve = options?.preserveDetached ? new Set(pendingCleanupMessages) : undefined;
     if (streamMessage) {
       pendingCleanupMessages.push(streamMessage);
       streamMessage = undefined;
     }
     lastVisibleUpdate = undefined;
     lastSentKey = "";
-    await dropDetachedMessages();
+    await dropDetachedMessages(preserve);
   };
 
-  const forceNewMessage = () => {
+  const forceNewMessage = (resume = true) => {
     stopTrackingConversationBoundary();
-    streamState.stopped = false;
+    // Human boundaries change the target without reopening a stream that is
+    // closing. Only explicit admission of another turn resumes delivery.
+    if (resume) {
+      streamState.stopped = false;
+    }
     streamState.final = false;
     if (streamMessage && !finalizedMessageIds.has(streamMessage.messageId)) {
       // A card abandoned below a newer human message is unreachable through
@@ -216,11 +233,6 @@ export function createSlackDraftStream(params: {
     lastVisibleUpdate = undefined;
     lastSentKey = "";
     loop.resetPending();
-  };
-
-  const discardPendingAndStopTracking = async () => {
-    stopTrackingConversationBoundary();
-    await discardPending();
   };
 
   const finalizeMessage = async (

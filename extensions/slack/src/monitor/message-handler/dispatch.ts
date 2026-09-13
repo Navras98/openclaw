@@ -659,6 +659,16 @@ async function dispatchSlackMessageWithSetup(
   });
 
   if (
+    !progress.isProgressMode &&
+    anyReplyDelivered &&
+    !draftPreviewCommitted.value &&
+    !dispatchError &&
+    !agentRunFailed
+  ) {
+    await draftStream?.clear({ preserveDetached: true });
+  }
+
+  if (
     progress.isProgressMode &&
     !progress.useNativeProgressStreaming &&
     !progress.useDraftProgressCard &&

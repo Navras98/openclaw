@@ -4242,12 +4242,22 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     );
   });
 
-  it.each([false, true])(
-    "retains a pre-tool preview only after a human replied to it (human reply: %s)",
-    async (humanReply) => {
+  it.each([
+    { humanReply: false, messageToolReply: false, delayedReceipt: false },
+    { humanReply: true, messageToolReply: false, delayedReceipt: false },
+    { humanReply: false, messageToolReply: true, delayedReceipt: false },
+    { humanReply: true, messageToolReply: true, delayedReceipt: false },
+    { humanReply: false, messageToolReply: true, delayedReceipt: true },
+    { humanReply: true, messageToolReply: true, delayedReceipt: true },
+  ])(
+    "retains a pre-tool preview only after a human replied to it (human=$humanReply, message tool=$messageToolReply, delayed receipt=$delayedReceipt)",
+    async ({ humanReply, messageToolReply, delayedReceipt }) => {
       mockedSlackStreamingMode = "partial";
       mockedSlackDraftMode = "replace";
-      mockedDispatchSequence = [{ kind: "final", payload: { text: FINAL_REPLY_TEXT } }];
+      mockedDispatchSequence = messageToolReply
+        ? []
+        : [{ kind: "final", payload: { text: FINAL_REPLY_TEXT } }];
+      mockedSourceReplyDelivered = messageToolReply;
       const { createMessageReceiptFromOutboundResults } =
         await import("openclaw/plugin-sdk/channel-outbound");
       const { createSlackDraftStream } =
@@ -4258,6 +4268,12 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       let nextMessageId = 100;
       let draftStream: ReturnType<typeof createSlackDraftStream> | undefined;
       let noteHumanReply = () => {};
+      let releaseReceipt!: () => void;
+      const receipt = new Promise<void>((resolve) => {
+        releaseReceipt = resolve;
+      });
+      let closeoutStarted = false;
+      let pendingFlush: Promise<void> | undefined;
       createSlackDraftStreamMock.mockImplementationOnce(
         (params: Parameters<typeof createSlackDraftStream>[0]) => {
           draftStream = createSlackDraftStream({
@@ -4265,6 +4281,9 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
             send: async (_target, text) => {
               const messageId = String(nextMessageId++);
               visibleMessages.set(messageId, text);
+              if (delayedReceipt) {
+                await receipt;
+              }
               return {
                 channelId: "C123",
                 messageId,
@@ -4281,6 +4300,11 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
               visibleMessages.delete(messageId);
             },
           });
+          const discardPending = draftStream.discardPending;
+          draftStream.discardPending = () => {
+            closeoutStarted = true;
+            return discardPending();
+          };
           noteHumanReply = () =>
             noteSlackDraftConversationMessage({
               accountId: params.accountId,
@@ -4302,18 +4326,37 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
         {
           kind: "checkpoint",
           run: async () => {
-            await draftStream?.flush();
+            pendingFlush = draftStream?.flush();
+            if (delayedReceipt) {
+              await vi.waitFor(() => expect(visibleMessages.size).toBe(1));
+            } else {
+              await pendingFlush;
+            }
             expect([...visibleMessages.values()]).toEqual(["I will inspect the files."]);
-            if (humanReply) {
+            if (humanReply && !delayedReceipt) {
               noteHumanReply();
+            }
+            if (messageToolReply) {
+              visibleMessages.set("message-tool-reply", FINAL_REPLY_TEXT);
             }
           },
         },
         { kind: "assistant_start" },
-        { kind: "partial", text: FINAL_REPLY_TEXT },
+        ...(messageToolReply ? [] : [{ kind: "partial" as const, text: FINAL_REPLY_TEXT }]),
       ];
 
-      await dispatchPreparedSlackMessage(createPreparedSlackMessage({}));
+      const dispatching = dispatchPreparedSlackMessage(createPreparedSlackMessage({}));
+      if (delayedReceipt) {
+        await vi.waitFor(() => expect(closeoutStarted).toBe(true));
+        if (humanReply) {
+          noteHumanReply();
+        }
+        releaseReceipt();
+      }
+      await dispatching;
+      await pendingFlush;
+      draftStream?.update("Late preview after final delivery");
+      await draftStream?.flush();
 
       expect([...visibleMessages.values()]).toEqual(
         humanReply ? ["I will inspect the files.", FINAL_REPLY_TEXT] : [FINAL_REPLY_TEXT],

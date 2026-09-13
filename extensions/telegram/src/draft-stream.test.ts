@@ -609,13 +609,16 @@ describe("createTelegramDraftStream", () => {
     async (operation) => {
       const api = createMockDraftApi();
       const stream = createDraftStream(api);
-      const receipt = Promise.withResolvers<MockSentMessage>();
+      let resolveReceipt!: (message: MockSentMessage) => void;
+      const receipt = new Promise<MockSentMessage>((resolve) => {
+        resolveReceipt = resolve;
+      });
       if (operation === "edit") {
         stream.update("Initial preview");
         await stream.flush();
-        api.editMessageText.mockReturnValueOnce(receipt.promise);
+        api.editMessageText.mockReturnValueOnce(receipt);
       } else {
-        api.sendMessage.mockReturnValueOnce(receipt.promise);
+        api.sendMessage.mockReturnValueOnce(receipt);
       }
 
       stream.update("Retired pre-tool preview");
@@ -624,7 +627,7 @@ describe("createTelegramDraftStream", () => {
         expect(operation === "edit" ? api.editMessageText : api.sendMessage).toHaveBeenCalled(),
       );
       stream.rotateToNewMessageDeferringDelete();
-      receipt.resolve({ message_id: 17 });
+      resolveReceipt({ message_id: 17 });
       await pending;
 
       // Final-error recovery reads this value; a retired generation cannot supply it.
