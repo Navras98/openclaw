@@ -114,6 +114,36 @@ describe("resolveGatewayService", () => {
     );
   });
 
+  it("keeps FreeBSD service ownership external and explains the package and foreground paths", async () => {
+    mockProcessPlatform("freebsd");
+    const service = resolveGatewayService();
+    const runtime = await service.readRuntime(process.env);
+    expect(runtime.status).toBe("unknown");
+    expect(runtime.detail).toContain("not supported by this CLI on FreeBSD");
+    expect(runtime.detail).toContain("openclaw_user to your onboarding account");
+    expect(runtime.detail).toContain('openclaw_enable="YES" in /etc/rc.conf');
+    expect(runtime.detail).toContain("`service openclaw start` (or stop/restart/status) as root");
+    expect(runtime.detail).toContain("`openclaw gateway run` as your onboarding account");
+
+    const args = {
+      env: process.env,
+      stdout: process.stdout,
+      programArguments: ["openclaw", "gateway", "run"],
+    };
+    for (const action of ["stage", "install", "uninstall", "start", "stop", "restart"] as const) {
+      await expect(service[action](args)).rejects.toThrow(runtime.detail);
+    }
+    await expect(service.isLoaded(args)).rejects.toThrow(runtime.detail);
+    await expect(service.readCommand(process.env)).resolves.toBeNull();
+    await expect(readGatewayServiceState(service)).resolves.toMatchObject({
+      installed: false,
+      loadState: { status: "unknown", detail: `Error: ${runtime.detail}` },
+      running: false,
+      command: null,
+      runtime,
+    });
+  });
+
   it("guards mutating service adapters when config was written by a newer OpenClaw", async () => {
     const tempHome = await makeTempWorkspace("openclaw-service-future-config-");
     const stateDir = path.join(tempHome, ".openclaw");
