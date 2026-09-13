@@ -122,8 +122,8 @@ function collect() {
   entries.sort((left, right) => compareText(left.name, right.name));
   // download-artifact extracts one match at the root without an artifact-name directory.
   // Treat the whole root as one artifact; its status supplies the shard ID.
-  const rootFiles = ["qa-evidence.json", "qa-profile-run-status.json"];
-  const artifacts = entries.some((entry) => rootFiles.includes(entry.name)) ? [null] : entries;
+  const rootFiles = new Set(["qa-evidence.json", "qa-profile-run-status.json"]);
+  const artifacts = entries.some((entry) => rootFiles.has(entry.name)) ? [null] : entries;
   for (const [index, entry] of artifacts.entries()) {
     // Artifact names and payload prose are untrusted; publish only an ordinal and known IDs.
     const source = `artifact-${String(index + 1).padStart(3, "0")}`;
