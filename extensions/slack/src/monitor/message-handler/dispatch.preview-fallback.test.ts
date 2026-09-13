@@ -4234,7 +4234,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
 
     await dispatchPreparedSlackMessage(createPreparedSlackMessage({}));
 
-    expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
+    expect(draftStream.forceNewMessage).not.toHaveBeenCalled();
     expect(draftStream.clear).toHaveBeenCalledOnce();
     expect(draftStream.dropDetachedMessages).toHaveBeenCalledOnce();
     expect(draftStream.dropDetachedMessages.mock.invocationCallOrder[0]).toBeGreaterThan(
@@ -4242,23 +4242,84 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     );
   });
 
-  it("preserves interrupted partial previews when a final reply is delivered", async () => {
-    const draftStream = createDraftStreamStub();
-    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
-    mockedSlackStreamingMode = "partial";
-    mockedSlackDraftMode = "replace";
-    mockedReplyOptionEvents = [
-      { kind: "partial", text: "first chunk" },
-      { kind: "assistant_start" },
-      { kind: "partial", text: "second chunk" },
-    ];
-    mockedDispatchSequence = [{ kind: "final", payload: { text: FINAL_REPLY_TEXT } }];
+  it.each([false, true])(
+    "retains a pre-tool preview only after a human replied to it (human reply: %s)",
+    async (humanReply) => {
+      mockedSlackStreamingMode = "partial";
+      mockedSlackDraftMode = "replace";
+      mockedDispatchSequence = [{ kind: "final", payload: { text: FINAL_REPLY_TEXT } }];
+      const { createMessageReceiptFromOutboundResults } =
+        await import("openclaw/plugin-sdk/channel-outbound");
+      const { createSlackDraftStream } =
+        await vi.importActual<typeof import("../../draft-stream.js")>("../../draft-stream.js");
+      const { noteSlackDraftConversationMessage } =
+        await import("../../draft-message-boundaries.js");
+      const visibleMessages = new Map<string, string>();
+      let nextMessageId = 100;
+      let draftStream: ReturnType<typeof createSlackDraftStream> | undefined;
+      let noteHumanReply = () => {};
+      createSlackDraftStreamMock.mockImplementationOnce(
+        (params: Parameters<typeof createSlackDraftStream>[0]) => {
+          draftStream = createSlackDraftStream({
+            ...params,
+            send: async (_target, text) => {
+              const messageId = String(nextMessageId++);
+              visibleMessages.set(messageId, text);
+              return {
+                channelId: "C123",
+                messageId,
+                receipt: createMessageReceiptFromOutboundResults({
+                  results: [{ channel: "slack", channelId: "C123", messageId }],
+                  kind: "preview",
+                }),
+              };
+            },
+            edit: async (_channelId, messageId, text) => {
+              visibleMessages.set(messageId, text);
+            },
+            remove: async (_channelId, messageId) => {
+              visibleMessages.delete(messageId);
+            },
+          });
+          noteHumanReply = () =>
+            noteSlackDraftConversationMessage({
+              accountId: params.accountId,
+              teamId: params.eventScope?.teamId,
+              channelId: "C123",
+              threadTs: params.resolveThreadTs?.(),
+              messageTs: String(nextMessageId++),
+              userId: "U_HUMAN",
+            });
+          return draftStream;
+        },
+      );
+      finalizeSlackPreviewEditMock.mockImplementationOnce(async (input) => {
+        const edit = requireRecord(input, "final preview edit");
+        visibleMessages.set(String(edit.messageId), String(edit.text));
+      });
+      mockedReplyOptionEvents = [
+        { kind: "partial", text: "I will inspect the files." },
+        {
+          kind: "checkpoint",
+          run: async () => {
+            await draftStream?.flush();
+            expect([...visibleMessages.values()]).toEqual(["I will inspect the files."]);
+            if (humanReply) {
+              noteHumanReply();
+            }
+          },
+        },
+        { kind: "assistant_start" },
+        { kind: "partial", text: FINAL_REPLY_TEXT },
+      ];
 
-    await dispatchPreparedSlackMessage(createPreparedSlackMessage({}));
+      await dispatchPreparedSlackMessage(createPreparedSlackMessage({}));
 
-    expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
-    expect(draftStream.dropDetachedMessages).not.toHaveBeenCalled();
-  });
+      expect([...visibleMessages.values()]).toEqual(
+        humanReply ? ["I will inspect the files.", FINAL_REPLY_TEXT] : [FINAL_REPLY_TEXT],
+      );
+    },
+  );
 
   it("starts a new draft delivery target when a queued followup is admitted", async () => {
     const draftStream = createDraftStreamStub();

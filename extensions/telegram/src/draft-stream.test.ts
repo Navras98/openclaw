@@ -604,6 +604,35 @@ describe("createTelegramDraftStream", () => {
     expect(api.deleteMessage).not.toHaveBeenCalled();
   });
 
+  it.each(["send", "edit"] as const)(
+    "does not recover a retired preview after a delayed %s receipt",
+    async (operation) => {
+      const api = createMockDraftApi();
+      const stream = createDraftStream(api);
+      const receipt = Promise.withResolvers<MockSentMessage>();
+      if (operation === "edit") {
+        stream.update("Initial preview");
+        await stream.flush();
+        api.editMessageText.mockReturnValueOnce(receipt.promise);
+      } else {
+        api.sendMessage.mockReturnValueOnce(receipt.promise);
+      }
+
+      stream.update("Retired pre-tool preview");
+      const pending = stream.flush();
+      await vi.waitFor(() =>
+        expect(operation === "edit" ? api.editMessageText : api.sendMessage).toHaveBeenCalled(),
+      );
+      stream.rotateToNewMessageDeferringDelete();
+      receipt.resolve({ message_id: 17 });
+      await pending;
+
+      // Final-error recovery reads this value; a retired generation cannot supply it.
+      expect(stream.lastDeliveredText()).toBe("");
+      await stream.stop();
+    },
+  );
+
   it.each(["first", "batched"] as const)(
     "keeps a settled %s reply target owned when reposition cleanup fails",
     async (replyToMode) => {

@@ -25,6 +25,7 @@ describe("Telegram progress command detail through the shared dispatcher and Tel
   let inboundSequence = 0;
   const sockets = new Set<Socket>();
   const calls: RecordedBotApiCall[] = [];
+  const visibleMessages = new Map<number, string>();
 
   beforeAll(async () => {
     server = createServer((request, response) => {
@@ -42,6 +43,7 @@ describe("Telegram progress command detail through the shared dispatcher and Tel
         if (method === "sendMessage" || method === "editMessageText") {
           const messageId =
             typeof fields.message_id === "number" ? fields.message_id : ++nextMessageId;
+          visibleMessages.set(messageId, String(fields.text ?? ""));
           response.end(
             JSON.stringify({
               ok: true,
@@ -54,6 +56,9 @@ describe("Telegram progress command detail through the shared dispatcher and Tel
             }),
           );
           return;
+        }
+        if (method === "deleteMessage") {
+          visibleMessages.delete(Number(fields.message_id));
         }
         response.end(JSON.stringify({ ok: true, result: true }));
       });
@@ -70,6 +75,7 @@ describe("Telegram progress command detail through the shared dispatcher and Tel
 
   beforeEach(() => {
     calls.length = 0;
+    visibleMessages.clear();
     nextMessageId = 0;
     resetPluginStateStoreForTests({ closeDatabase: false });
     resetTelegramReplyFenceForTest();
@@ -156,6 +162,11 @@ describe("Telegram progress command detail through the shared dispatcher and Tel
 
   async function dispatchProgressTurn(
     emitEvents: (options: ReplyResolverOptions) => Promise<void>,
+    scenario?: {
+      mode: "partial";
+      toolProgress: boolean;
+      finalReply: { text: string; isError?: boolean };
+    },
   ) {
     const replyResolver: ReplyResolver = async (_ctx, options) => {
       await options?.onReplyStart?.();
@@ -164,15 +175,22 @@ describe("Telegram progress command detail through the shared dispatcher and Tel
       // The final answer follows the finished progress edit, as a model that
       // answers after reading the command output does. Earlier edits may flush
       // first (attention statuses bypass the edit throttle).
-      await waitForBotApiCall(
-        (call) => call.method === "editMessageText" && String(call.fields.text).includes("exit 2"),
-      );
-      return { text: "The command failed." };
+      if (!scenario) {
+        await waitForBotApiCall(
+          (call) =>
+            call.method === "editMessageText" && String(call.fields.text).includes("exit 2"),
+        );
+      }
+      return scenario?.finalReply ?? { text: "The command failed." };
     };
     const telegramCfg = {
       botToken: BOT_TOKEN,
       apiRoot,
-      streaming: { mode: "progress", progress: { toolProgress: true, commandText: "raw" } },
+      streaming: {
+        mode: scenario?.mode ?? "progress",
+        preview: { toolProgress: scenario?.toolProgress ?? true, commandText: "raw" },
+        progress: { toolProgress: true, commandText: "raw" },
+      },
     } as const;
     const cfg = { channels: { telegram: telegramCfg } };
     const errors: string[] = [];
@@ -191,7 +209,7 @@ describe("Telegram progress command detail through the shared dispatcher and Tel
         },
       },
       replyToMode: "off",
-      streamMode: "progress",
+      streamMode: scenario?.mode ?? "progress",
       textLimit: 4096,
       telegramCfg,
       opts: {
@@ -214,6 +232,51 @@ describe("Telegram progress command detail through the shared dispatcher and Tel
       .filter((call) => call.method === "sendMessage" || call.method === "editMessageText")
       .map((call) => [call.method, call.fields.message_id ?? null, call.fields.text] as const);
   }
+
+  it("retires unaccepted pre-tool text across a tool-only assistant message", async () => {
+    const preamble = "I will inspect the files before answering.";
+    const finalText = "The requested result.";
+    await dispatchProgressTurn(
+      async (options) => {
+        await options?.onPartialReply?.({ text: preamble, delta: preamble });
+        await waitForBotApiCall(
+          (call) => call.method === "sendMessage" && call.fields.text === preamble,
+        );
+        await options?.onToolStart?.({ name: "exec", phase: "start", toolCallId: "first" });
+        // An unphased provider can continue with a tool-only assistant message.
+        // Its start clears progress suppression without replacing the old preview.
+        await options?.onAssistantMessageStart?.();
+        await options?.onToolStart?.({ name: "exec", phase: "start", toolCallId: "second" });
+        await options?.onAssistantMessageStart?.();
+      },
+      { mode: "partial", toolProgress: true, finalReply: { text: finalText } },
+    );
+
+    // Retired previews keep their existing four-second minimum display time.
+    await expect.poll(() => [...visibleMessages.values()], { timeout: 5_000 }).toEqual([finalText]);
+  });
+
+  it.each([false, true])(
+    "does not prefix a terminal error with pre-tool text (tool progress: %s)",
+    async (toolProgress) => {
+      const preamble = "I will inspect the files before answering.";
+      const finalText = "The provider failed. Please try again.";
+      await dispatchProgressTurn(
+        async (options) => {
+          await options?.onPartialReply?.({ text: preamble, delta: preamble });
+          await waitForBotApiCall(
+            (call) => call.method === "sendMessage" && call.fields.text === preamble,
+          );
+          await options?.onToolStart?.({ name: "exec", phase: "start", toolCallId: "first" });
+        },
+        { mode: "partial", toolProgress, finalReply: { text: finalText, isError: true } },
+      );
+
+      await expect
+        .poll(() => [...visibleMessages.values()], { timeout: 5_000 })
+        .toEqual([finalText]);
+    },
+  );
 
   it("keeps the raw command text on the finished progress line instead of the output title", async () => {
     // Same event sequence as the dispatch unit fixture: the exec tool starts with
