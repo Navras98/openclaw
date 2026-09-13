@@ -24,6 +24,7 @@ import { coerceToFailoverError, isFailoverError } from "../failover-error.js";
 import { recordAgentCleanupFailure } from "../run-cleanup-timeout.js";
 import { CliAuthProfilePreparationError } from "./auth-profile-preparation-error.js";
 import { runCliCleanup } from "./cleanup.js";
+import { resolveCliSessionId } from "./cli-run-recovery.js";
 import { hashCliReseedPrompt } from "./reseed-envelope.js";
 import type { ClaudeCliRunDiagnosticLifecycle } from "./run-diagnostics.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./types.js";
@@ -502,9 +503,13 @@ export function buildCliRunResult(params: {
       ? effectiveCliSessionId
       : undefined;
   const terminalInterruption = output.terminalInterruption;
-  // Interruption alone does not invalidate a native transcript. The bounded
-  // flush probe above decides whether the binding is safe to persist.
-  const cliSessionBindingCleared = sessionBindingDisabled || unflushedCliSessionId !== undefined;
+  // Cancellation preserves established continuity, but an unfinished replacement
+  // still needs cleanup even when managed sessions skip the transcript probe.
+  const cliSessionBindingCleared =
+    sessionBindingDisabled ||
+    unflushedCliSessionId !== undefined ||
+    (terminalInterruption !== undefined &&
+      effectiveCliSessionId !== resolveCliSessionId(context.reusableCliSession));
   const persistedCliSessionId = cliSessionBindingCleared ? undefined : effectiveCliSessionId;
   const createdReseedReceipt =
     persistedCliSessionId &&
