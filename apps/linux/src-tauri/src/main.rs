@@ -1217,11 +1217,15 @@ fn replace_main_webview(
     let window = app
         .get_window("main")
         .ok_or("Main window is unavailable.")?;
+    let previous = app.get_webview("main");
+    if let Some(previous) = &previous {
+        window_chrome::loading(previous);
+    }
     let size = window
         .inner_size()
         .map_err(|error| format!("Could not measure the dashboard: {error}"))?;
     // Replace only the dashboard document, retaining the native window, tray and geometry.
-    if let Some(previous) = app.get_webview("main") {
+    if let Some(previous) = previous {
         native_browser_platform::detach_surface(&previous)?;
         previous
             .close()
@@ -1382,21 +1386,18 @@ fn main() {
             .cloned()
             .expect("tauri.conf.json must define the main window");
         let browser_app = app.handle().clone();
-        let window = window_chrome::configure(WebviewWindowBuilder::from_config(
-            app.handle(),
-            &window_config,
-        )?)
-        .initialization_script(window_chrome::initialization_script(None, true))
-        .on_page_load(|window, payload| {
-            if let Some(webview) = window.app_handle().get_webview("main") {
-                native_browser_bridge::page_load(webview, payload, None);
-            }
-        })
-        .on_new_window(move |url, _features| {
-            open_external_browser(&browser_app, &url);
-            NewWindowResponse::Deny
-        })
-        .build()?;
+        let window = WebviewWindowBuilder::from_config(app.handle(), &window_config)?
+            .initialization_script(window_chrome::initialization_script(None, true))
+            .on_page_load(|window, payload| {
+                if let Some(webview) = window.app_handle().get_webview("main") {
+                    native_browser_bridge::page_load(webview, payload, None);
+                }
+            })
+            .on_new_window(move |url, _features| {
+                open_external_browser(&browser_app, &url);
+                NewWindowResponse::Deny
+            })
+            .build()?;
         window_chrome::install(&window.as_ref().window())?;
         #[cfg(target_os = "macos")]
         if let Some(view) = app.get_webview("main") {

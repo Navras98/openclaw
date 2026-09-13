@@ -477,25 +477,21 @@ pub fn connect_discovered_gateway(
     }
     crate::window_chrome::grant(&app, &label, &url)?;
     let chrome = crate::window_chrome::initialization_script(Some(&url), false);
-    let window = crate::window_chrome::configure(WebviewWindowBuilder::new(
-        &app,
-        &label,
-        WebviewUrl::External(url),
-    ))
-    .initialization_script(chrome)
-    .on_page_load(|window, payload| {
-        if matches!(payload.event(), tauri::webview::PageLoadEvent::Started) {
-            if let Some(view) = window.app_handle().get_webview(window.label()) {
-                crate::window_chrome::loading(&view);
+    let window = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(url))
+        .initialization_script(chrome)
+        .on_page_load(|window, payload| {
+            if matches!(payload.event(), tauri::webview::PageLoadEvent::Started) {
+                if let Some(view) = window.app_handle().get_webview(window.label()) {
+                    crate::window_chrome::loading(&view);
+                }
             }
-        }
-    })
-    .title(format!("{name} — OpenClaw"))
-    .inner_size(1080.0, 720.0)
-    .min_inner_size(720.0, 520.0)
-    .center()
-    .build()
-    .map_err(|error| format!("Could not open Gateway window: {error}"))?;
+        })
+        .title(format!("{name} — OpenClaw"))
+        .inner_size(1080.0, 720.0)
+        .min_inner_size(720.0, 520.0)
+        .center()
+        .build()
+        .map_err(|error| format!("Could not open Gateway window: {error}"))?;
     crate::window_chrome::install(&window.as_ref().window())
         .map_err(|error| format!("Could not enable window chrome: {error}"))?;
     if let Some(view) = app.get_webview(window.label()) {

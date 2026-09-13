@@ -1,7 +1,7 @@
 //! The companion owns its window controls; Gateway pages only operate their own window.
 use serde::{Deserialize, Serialize};
 use tauri::ipc::CapabilityBuilder;
-use tauri::{AppHandle, Manager, Url, Webview, WebviewWindowBuilder, Window};
+use tauri::{AppHandle, Manager, Url, Webview, Window};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -31,16 +31,6 @@ struct HistoryState {
     can_go_forward: bool,
 }
 
-pub fn configure<M: Manager<tauri::Wry>>(
-    builder: WebviewWindowBuilder<'_, tauri::Wry, M>,
-) -> WebviewWindowBuilder<'_, tauri::Wry, M> {
-    #[cfg(target_os = "macos")]
-    let builder = builder
-        .title_bar_style(tauri::TitleBarStyle::Overlay)
-        .hidden_title(true);
-    builder
-}
-
 pub fn install(window: &Window) -> tauri::Result<()> {
     #[cfg(target_os = "linux")]
     return crate::window_chrome_linux::install(window);
@@ -59,7 +49,7 @@ pub fn loading(webview: &Webview) {
     #[cfg(not(target_os = "macos"))]
     let _ = webview.window().set_decorations(true);
     #[cfg(target_os = "macos")]
-    let _ = webview;
+    let _ = crate::window_chrome_macos::set_unified(&webview.window(), false);
 }
 
 pub fn grant(app: &AppHandle, label: &str, url: &Url) -> Result<(), String> {
@@ -203,6 +193,9 @@ pub async fn window_chrome_request(
     }
     match action {
         WindowAction::Ready => {
+            #[cfg(target_os = "macos")]
+            crate::window_chrome_macos::set_unified(&window, true)
+                .map_err(|error| error.to_string())?;
             #[cfg(not(target_os = "macos"))]
             window
                 .set_decorations(false)
@@ -210,6 +203,9 @@ pub async fn window_chrome_request(
             Ok(())
         }
         WindowAction::NativeFrame => {
+            #[cfg(target_os = "macos")]
+            crate::window_chrome_macos::set_unified(&window, false)
+                .map_err(|error| error.to_string())?;
             #[cfg(not(target_os = "macos"))]
             window
                 .set_decorations(true)

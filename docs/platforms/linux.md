@@ -42,6 +42,9 @@ session title to move the window, and double-click to maximize or restore it.
 The thin strip below the top resize edge also moves the window. Minimize,
 maximize/restore, and close sit at the top right; the window edges remain
 resizable. Closing the main window leaves OpenClaw available in the system tray.
+When connecting to an older Gateway whose dashboard does not support this layout,
+the companion keeps the system title bar. Update the Gateway to enable the unified
+window controls.
 
 ### First-run setup
 

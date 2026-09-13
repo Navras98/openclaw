@@ -21,6 +21,9 @@ Gateway window closes that window.
 While a page loads, redirects outside the dashboard, or opens a modal dialog,
 Linux and Windows keep the system title bar available until the companion's
 controls can receive input again.
+Dashboards opt into the unified title bar only when their UI supports its layout
+and modal handling. Older Gateways keep the system title bar and their existing
+dashboard controls; update the Gateway to enable the unified layout.
 
 Published AMD64 AppImages are built on Ubuntu 22.04 and require glibc 2.35 or
 newer plus a `libstdc++` that provides `GLIBCXX_3.4.30`. Ubuntu 22.04 and

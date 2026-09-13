@@ -4,7 +4,7 @@ use objc2::runtime::ProtocolObject;
 use objc2::{define_class, msg_send, ClassType, DefinedClass, MainThreadOnly};
 use objc2_app_kit::{
     NSApplication, NSAutoresizingMaskOptions, NSEvent, NSEventType, NSTitlebarSeparatorStyle,
-    NSToolbar, NSView, NSWindow, NSWindowStyleMask, NSWindowToolbarStyle,
+    NSToolbar, NSView, NSWindow, NSWindowStyleMask, NSWindowTitleVisibility, NSWindowToolbarStyle,
 };
 use objc2_foundation::{
     MainThreadMarker, NSDictionary, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString,
@@ -161,6 +161,9 @@ impl WindowDragHandler {
             let Some(window) = browser.window() else {
                 return;
             };
+            if window.toolbar().is_none() {
+                return;
+            }
             let mtm =
                 MainThreadMarker::new().expect("WebKit view callbacks run on the main thread");
             // Match the Swift host: use the current real press, never reconstruct
@@ -188,8 +191,57 @@ fn with_window(
 }
 
 fn sync_visibility(window: &NSWindow) {
-    let visible = !window.styleMask().contains(NSWindowStyleMask::FullScreen);
-    if let Some(toolbar) = window.toolbar() {
+    // The sizing toolbar is owned by this module. Its presence records unified
+    // mode even while fullscreen temporarily hides it, without a second store.
+    let toolbar = window.toolbar();
+    let unified = toolbar.is_some();
+    let mask = window.styleMask();
+    let fullscreen = mask.contains(NSWindowStyleMask::FullScreen);
+    if !fullscreen {
+        let desired_mask = if unified {
+            mask | NSWindowStyleMask::FullSizeContentView
+        } else {
+            mask & !NSWindowStyleMask::FullSizeContentView
+        };
+        if mask != desired_mask {
+            // AppKit can restore the pre-fullscreen style mask on exit. Apply
+            // the selected mode again, preserving focus across its view relayout.
+            let responder = window.firstResponder();
+            window.setStyleMask(desired_mask);
+            if let Some(responder) = responder {
+                window.makeFirstResponder(Some(&responder));
+            }
+        }
+    }
+    let title_visibility = if unified {
+        NSWindowTitleVisibility::Hidden
+    } else {
+        NSWindowTitleVisibility::Visible
+    };
+    if window.titleVisibility() != title_visibility {
+        window.setTitleVisibility(title_visibility);
+    }
+    if window.titlebarAppearsTransparent() != unified {
+        window.setTitlebarAppearsTransparent(unified);
+    }
+    let toolbar_style = if unified {
+        NSWindowToolbarStyle::Unified
+    } else {
+        NSWindowToolbarStyle::Automatic
+    };
+    if window.toolbarStyle() != toolbar_style {
+        window.setToolbarStyle(toolbar_style);
+    }
+    let separator_style = if unified {
+        NSTitlebarSeparatorStyle::None
+    } else {
+        NSTitlebarSeparatorStyle::Automatic
+    };
+    if window.titlebarSeparatorStyle() != separator_style {
+        window.setTitlebarSeparatorStyle(separator_style);
+    }
+    let visible = unified && !fullscreen;
+    if let Some(toolbar) = toolbar {
         if toolbar.isVisible() != visible {
             toolbar.setVisible(visible);
         }
@@ -204,15 +256,24 @@ fn sync_visibility(window: &NSWindow) {
 }
 
 pub fn install_window(window: &Window) -> tauri::Result<()> {
-    with_window(window, |window, mtm| {
-        // As in the Swift app, an empty unified toolbar sizes the native row
-        // to 52pt without depending on the current dashboard WebView.
-        let toolbar = NSToolbar::new(mtm);
-        toolbar.setAllowsUserCustomization(false);
-        toolbar.setAutosavesConfiguration(false);
-        window.setToolbar(Some(&toolbar));
-        window.setToolbarStyle(NSWindowToolbarStyle::Unified);
-        window.setTitlebarSeparatorStyle(NSTitlebarSeparatorStyle::None);
+    set_unified(window, false)
+}
+
+pub fn set_unified(window: &Window, unified: bool) -> tauri::Result<()> {
+    with_window(window, move |window, mtm| {
+        if unified {
+            if window.toolbar().is_none() {
+                // As in the Swift app, an empty toolbar sizes the unified row
+                // to 52pt only after the document announces support for it.
+                let toolbar = NSToolbar::new(mtm);
+                toolbar.setAllowsUserCustomization(false);
+                toolbar.setAutosavesConfiguration(false);
+                toolbar.setVisible(false);
+                window.setToolbar(Some(&toolbar));
+            }
+        } else if window.toolbar().is_some() {
+            window.setToolbar(None);
+        }
         sync_visibility(window);
     })
 }
@@ -270,6 +331,7 @@ pub fn install_webview(webview: &Webview) -> tauri::Result<()> {
                 NSRect::new(NSPoint::new(x, y), NSSize::new(region_width, region_height)),
                 mtm,
             );
+            region.setHidden(true);
             region.setAutoresizingMask(horizontal | top_margin);
             parent.addSubview(&region);
         }

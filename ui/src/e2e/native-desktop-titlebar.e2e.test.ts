@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -12,7 +13,98 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 
 const suite = createControlUiE2eSuite({ name: "Native desktop titlebar E2E" });
 
+async function installWindowChrome(page: Page, platform: "linux" | "windows" | "macos") {
+  const chromeScript = readFileSync(
+    new URL("../../../apps/linux/ui/window-chrome.js", import.meta.url),
+    "utf8",
+  );
+  const chromeCss = readFileSync(
+    new URL("../../../apps/linux/ui/window-chrome.css", import.meta.url),
+    "utf8",
+  );
+  await page.addInitScript(() => {
+    const actions: string[] = [];
+    let maximized = false;
+    Object.assign(window, {
+      openclawWindowActions: actions,
+      __TAURI_INTERNALS__: {
+        invoke: async (command: string, params: { action: string }) => {
+          if (command === "window_chrome_drag") {
+            actions.push("drag");
+            return null;
+          }
+          actions.push(params.action);
+          const state = { maximized, fullscreen: false, focused: true };
+          if (params.action === "toggle-maximize") {
+            maximized = !maximized;
+            queueMicrotask(() =>
+              window.dispatchEvent(
+                new CustomEvent("openclaw:window-state", { detail: { ...state, maximized } }),
+              ),
+            );
+          }
+          return {
+            ...state,
+            ...(params.action === "state"
+              ? { history: { canGoBack: false, canGoForward: false } }
+              : {}),
+          };
+        },
+      },
+    });
+  });
+  await page.addInitScript({
+    content: `(${chromeScript})(${JSON.stringify({ platform, origin: new URL(suite.server.baseUrl).origin, css: chromeCss, waitForDashboard: true })})`,
+  });
+  return () => page.evaluate(() => Reflect.get(window, "openclawWindowActions") as string[]);
+}
+
 suite.define(() => {
+  it.each(["linux", "windows", "macos"] as const)(
+    "keeps the native %s frame when a dashboard does not advertise shared chrome",
+    async (platform) => {
+      await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+        const actions = await installWindowChrome(page, platform);
+        await page.route("**/legacy-dashboard", (route) =>
+          route.fulfill({
+            contentType: "text/html",
+            body: "<!doctype html><html><head><title>Legacy dashboard</title></head><body><main><h1>Dashboard</h1><button>Settings</button></main></body></html>",
+          }),
+        );
+        await page.goto(`${suite.server.baseUrl}legacy-dashboard`);
+        await expect.poll(actions).toEqual(["native-frame"]);
+        await page.evaluate(() => {
+          window.dispatchEvent(
+            new CustomEvent("openclaw:window-state", {
+              detail: { focused: false, maximized: true, fullscreen: true },
+            }),
+          );
+          window.dispatchEvent(new Event("openclaw:window-history-changed"));
+          window.dispatchEvent(new Event("openclaw:native-browser-ready"));
+        });
+        expect(await actions()).toEqual(["native-frame"]);
+        expect(
+          await page.evaluate(() => ({
+            chromeEnabled: Reflect.get(window, "__OPENCLAW_NATIVE_WEB_CHROME__"),
+            history: Reflect.get(window, "__OPENCLAW_NATIVE_HISTORY__"),
+            adapter: Reflect.get(window, "__OPENCLAW_WINDOW_HANDLERS__"),
+            rootClasses: document.documentElement.className,
+            controls: document.querySelectorAll(
+              ".openclaw-window-controls, .openclaw-window-drag-edge",
+            ).length,
+          })),
+        ).toEqual({
+          chromeEnabled: undefined,
+          history: undefined,
+          adapter: undefined,
+          rootClasses: "",
+          controls: 0,
+        });
+        await page.getByRole("button", { name: "Settings", exact: true }).click({ trial: true });
+      });
+    },
+  );
+
   it.each([
     { platform: "linux" as const, width: 1280 },
     { platform: "windows" as const, width: 720 },
@@ -24,48 +116,7 @@ suite.define(() => {
         const proofDir = proofParent
           ? createControlUiE2eArtifactDir("native-desktop-titlebar", proofParent)
           : undefined;
-        const chromeScript = readFileSync(
-          new URL("../../../apps/linux/ui/window-chrome.js", import.meta.url),
-          "utf8",
-        );
-        const chromeCss = readFileSync(
-          new URL("../../../apps/linux/ui/window-chrome.css", import.meta.url),
-          "utf8",
-        );
-        await page.addInitScript(() => {
-          const actions: string[] = [];
-          let maximized = false;
-          Object.assign(window, {
-            openclawWindowActions: actions,
-            __TAURI_INTERNALS__: {
-              invoke: async (command: string, params: { action: string }) => {
-                if (command === "window_chrome_drag") {
-                  actions.push("drag");
-                  return null;
-                }
-                actions.push(params.action);
-                const state = { maximized, fullscreen: false, focused: true };
-                if (params.action === "toggle-maximize") {
-                  maximized = !maximized;
-                  queueMicrotask(() =>
-                    window.dispatchEvent(
-                      new CustomEvent("openclaw:window-state", { detail: { ...state, maximized } }),
-                    ),
-                  );
-                }
-                return {
-                  ...state,
-                  ...(params.action === "state"
-                    ? { history: { canGoBack: false, canGoForward: false } }
-                    : {}),
-                };
-              },
-            },
-          });
-        });
-        await page.addInitScript({
-          content: `(${chromeScript})(${JSON.stringify({ platform, origin: new URL(suite.server.baseUrl).origin, css: chromeCss, waitForDashboard: true })})`,
-        });
+        const actions = await installWindowChrome(page, platform);
         await installMockGateway(page, {
           featureMethods: ["chat.metadata", "chat.startup", "sessions.create"],
         });
@@ -108,8 +159,6 @@ suite.define(() => {
             });
           }
         };
-        const actions = () =>
-          page.evaluate(() => Reflect.get(window, "openclawWindowActions") as string[]);
         await page.getByRole("button", { name: "Minimize window", exact: true }).click();
         await page.getByRole("button", { name: "Close window", exact: true }).click();
         expect(await actions()).toEqual(["ready", "minimize", "close"]);

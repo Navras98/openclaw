@@ -7,6 +7,8 @@
   const dashboard = Boolean(config.origin);
   const macos = config.platform === "macos";
   const invoke = window.__TAURI_INTERNALS__.invoke.bind(window.__TAURI_INTERNALS__);
+  let enabled = !dashboard;
+  let installed = false;
   let controls;
   let maximize;
   let errorNotice;
@@ -15,7 +17,7 @@
   let modalOpen = Boolean(document.openClawModalLayers?.size);
   let chromeUpdate = Promise.resolve();
   const applyState = (state) => {
-    if (!document.documentElement) return;
+    if (!enabled || !document.documentElement) return;
     document.documentElement.classList.toggle("openclaw-window-fullscreen", state.fullscreen);
     document.documentElement.classList.toggle("openclaw-window-unfocused", !state.focused);
     if (maximize) {
@@ -26,7 +28,7 @@
     }
   };
   const request = async (action) => {
-    if (action === "state" && !ready) return;
+    if (action === "state" && (!enabled || !ready)) return;
     const version = action === "state" ? ++stateRequest : null;
     try {
       const state = action === "drag"
@@ -50,11 +52,12 @@
     }
   };
   const syncChrome = () => {
-    chromeUpdate = chromeUpdate.then(() => request(modalOpen ? "native-frame" : "ready"));
+    chromeUpdate = chromeUpdate.then(() => request(!enabled || (modalOpen && !macos) ? "native-frame" : "ready"));
     return chromeUpdate;
   };
   window.addEventListener("openclaw:window-state", (event) => applyState(event.detail));
   window.addEventListener("openclaw:native-modal-state", (event) => {
+    if (!enabled) return;
     modalOpen = event.detail.open;
     // HTML modal dialogs make body siblings inert, including caption buttons.
     // Keep real OS controls available until the last modal closes.
@@ -63,7 +66,7 @@
   window.addEventListener("openclaw:window-history-changed", () => void request("state"));
   window.addEventListener("openclaw:native-browser-ready", () => {
     ready = true;
-    void syncChrome().then(() => request("state"));
+    if (enabled) void syncChrome().then(() => request("state"));
   });
   // Keep the actual event through the shared UI's bubbling mousedown handler.
   // This preserves double-click zoom without changing the macOS bridge contract.
@@ -87,7 +90,7 @@
     void request("drag");
   }, true);
   const drag = () => {
-    if (!press || press.defaultPrevented) return;
+    if (!enabled || !press || press.defaultPrevented) return;
     if (macos) {
       window.webkit?.messageHandlers?.openclawWindowDrag?.postMessage({ type: "window-drag" });
     } else if (press.detail > 1 && press.detail % 2 === 0) {
@@ -98,19 +101,19 @@
       pendingDrag = { x: press.clientX, y: press.clientY };
     }
   };
-  if (!macos) {
-    window.webkit ??= {};
-    window.webkit.messageHandlers ??= {};
-    const handlers = window.webkit.messageHandlers;
-    // WebKit weakly caches its native registry wrapper; retain our adapter.
-    Object.defineProperty(window, "__OPENCLAW_WINDOW_HANDLERS__", { value: handlers, configurable: true });
-    Object.defineProperty(handlers, "openclawWindowDrag", {
-      value: { postMessage: drag }, configurable: true,
-    });
-  }
-  if (dashboard) window.__OPENCLAW_NATIVE_WEB_CHROME__ = true;
-
   const install = () => {
+    if (installed || !enabled) return;
+    installed = true;
+    if (!macos) {
+      window.webkit ??= {};
+      window.webkit.messageHandlers ??= {};
+      const handlers = window.webkit.messageHandlers;
+      // WebKit weakly caches its native registry wrapper; retain our adapter.
+      Object.defineProperty(window, "__OPENCLAW_WINDOW_HANDLERS__", { value: handlers, configurable: true });
+      Object.defineProperty(handlers, "openclawWindowDrag", {
+        value: { postMessage: drag }, configurable: true,
+      });
+    }
     const root = document.documentElement;
     root.dataset.nativePlatform = config.platform;
     root.classList.add("openclaw-native-desktop");
@@ -166,6 +169,17 @@
     document.body.append(errorNotice);
     void syncChrome().then(() => request("state"));
   };
-  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", install, { once: true });
-  else install();
+  if (dashboard) {
+    window.addEventListener("openclaw:native-window-chrome-available", () => {
+      enabled = true;
+      window.__OPENCLAW_NATIVE_WEB_CHROME__ = true;
+      if (document.readyState !== "loading") install();
+    }, { once: true });
+  }
+  const documentReady = () => {
+    if (enabled) install();
+    else void syncChrome();
+  };
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", documentReady, { once: true });
+  else documentReady();
 }
