@@ -34,11 +34,27 @@ function buildConfig(
   } as OpenClawConfig;
 }
 
-function createInteraction(overrides?: Partial<ButtonInteraction>): ButtonInteraction {
+function createInteraction(
+  overrides?: Partial<ButtonInteraction>,
+  approvalKind: Parameters<typeof buildExecApprovalCustomId>[1] = "exec",
+  approvalId = "abc",
+): ButtonInteraction {
   return {
     userId: "123",
     reply: vi.fn(),
     acknowledge: vi.fn(),
+    message: { id: "message-1" },
+    fetchReply: vi.fn(async () => ({
+      components: [
+        {
+          type: 1,
+          components: (["allow-once", "allow-always", "deny"] as const).map((decision) => ({
+            type: 2,
+            custom_id: buildExecApprovalCustomId(approvalId, approvalKind, decision),
+          })),
+        },
+      ],
+    })),
     editReply: vi.fn(),
     followUp: vi.fn(),
     ...overrides,
@@ -138,7 +154,7 @@ describe("discord exec approval monitor helpers", () => {
     "acknowledges and resolves valid %s approval clicks",
     async (approvalKind) => {
       const editReply = vi.fn();
-      const interaction = createInteraction({ editReply });
+      const interaction = createInteraction({ editReply }, approvalKind);
       const resolveApproval = vi.fn(
         async () =>
           ({
@@ -188,7 +204,7 @@ describe("discord exec approval monitor helpers", () => {
 
   it("cleans stale controls and shows the canonical winner after losing the race", async () => {
     const editReply = vi.fn();
-    const interaction = createInteraction({ editReply });
+    const interaction = createInteraction({ editReply }, "plugin", "plain-plugin-id");
     const resolution = createApprovalResolution({
       id: "plain-plugin-id",
       applied: false,
@@ -226,6 +242,60 @@ describe("discord exec approval monitor helpers", () => {
       content: "This approval was already resolved: Denied.",
       ephemeral: true,
     });
+  });
+
+  it.each(["Applied", "Not applied"])(
+    "preserves the native %s card when its controls are already gone",
+    async (outcome) => {
+      const currentMessage = { components: [{ type: 10, content: outcome }] };
+      const interaction = createInteraction({ fetchReply: vi.fn(async () => currentMessage) });
+      const button = createExecApprovalButton({
+        getApprovers: () => ["123"],
+        resolveApproval: async () => ({ ok: true, resolution: createApprovalResolution() }),
+      });
+
+      await button.run(interaction, { kind: "system-agent", id: "abc", action: "allow-once" });
+
+      expect(interaction.fetchReply).toHaveBeenCalledOnce();
+      expect(interaction.editReply).not.toHaveBeenCalled();
+      expect(interaction.followUp).toHaveBeenCalledWith({
+        content: "Approval resolved: Allowed once.",
+        ephemeral: true,
+      });
+    },
+  );
+
+  it("preserves the card when its current controls cannot be read", async () => {
+    const interaction = createInteraction({
+      fetchReply: vi.fn(async () => {
+        throw new Error("message lookup failed");
+      }),
+    });
+    const button = createExecApprovalButton({
+      getApprovers: () => ["123"],
+      resolveApproval: async () => ({ ok: true, resolution: createApprovalResolution() }),
+    });
+
+    await button.run(interaction, { kind: "system-agent", id: "abc", action: "allow-once" });
+
+    expect(interaction.editReply).not.toHaveBeenCalled();
+    expect(interaction.followUp).toHaveBeenCalledWith({
+      content: "Approval resolved: Allowed once.",
+      ephemeral: true,
+    });
+  });
+
+  it("does not replace another approval's controls on the same message", async () => {
+    const interaction = createInteraction(undefined, "system-agent", "replacement");
+    const button = createExecApprovalButton({
+      getApprovers: () => ["123"],
+      resolveApproval: async () => ({ ok: true, resolution: createApprovalResolution() }),
+    });
+
+    await button.run(interaction, { kind: "system-agent", id: "abc", action: "allow-once" });
+
+    expect(interaction.editReply).not.toHaveBeenCalled();
+    expect(interaction.followUp).toHaveBeenCalledOnce();
   });
 
   it("shows a follow-up when gateway resolution fails", async () => {
