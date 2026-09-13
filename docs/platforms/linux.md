@@ -37,6 +37,12 @@ Gateways. It:
   (the same import stays available later under Settings → Import Memory)
 - remains available from the system tray when its window is closed
 
+The window controls share the dashboard's top row. Drag empty header space or a
+session title to move the window, and double-click to maximize or restore it.
+The thin strip below the top resize edge also moves the window. Minimize,
+maximize/restore, and close sit at the top right; the window edges remain
+resizable. Closing the main window leaves OpenClaw available in the system tray.
+
 ### First-run setup
 
 Choose **Get started** on the welcome screen, then choose where your assistant
