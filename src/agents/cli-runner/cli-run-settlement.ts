@@ -499,16 +499,13 @@ export function buildCliRunResult(params: {
     toolTrustedLocalMedia: output.toolTrustedLocalMedia,
     sourceReplyDeliveryMode: runParams.sourceReplyDeliveryMode,
   });
-  const unflushedCliSessionId =
-    !sessionBindingDisabled && effectiveCliSessionId && bindingFlushOk === false
-      ? effectiveCliSessionId
-      : undefined;
+  const unflushed = !sessionBindingDisabled && effectiveCliSessionId && bindingFlushOk === false;
   const terminalInterruption = output.terminalInterruption;
   // Cancellation preserves established continuity, but an unfinished replacement
   // still needs cleanup even when managed sessions skip the transcript probe.
   const cliSessionBindingCleared =
     sessionBindingDisabled ||
-    unflushedCliSessionId !== undefined ||
+    unflushed ||
     shouldClearInterruptedCliSessionBinding({
       interrupted: terminalInterruption !== undefined,
       bindingReplacedDuringRun:
@@ -537,7 +534,7 @@ export function buildCliRunResult(params: {
       : undefined;
   const reseedReceipt = createdReseedReceipt ?? preservedReseedReceipt;
   const agentSessionId =
-    terminalInterruption || unflushedCliSessionId
+    terminalInterruption || unflushed
       ? ""
       : sessionBindingDisabled
         ? (runParams.sessionId ?? "")
