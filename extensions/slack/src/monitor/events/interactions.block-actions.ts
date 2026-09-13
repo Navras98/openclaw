@@ -537,6 +537,22 @@ function removeSlackApprovalControls(blocks: unknown[]): (Block | KnownBlock)[] 
   });
 }
 
+function hasSlackApprovalControls(blocks: unknown[] | undefined): boolean {
+  return (
+    blocks?.some((rawBlock) => {
+      const block = asOptionalRecord(rawBlock);
+      return (
+        block?.type === "actions" &&
+        Array.isArray(block.elements) &&
+        block.elements.some((element) => {
+          const actionId = asOptionalRecord(element)?.action_id;
+          return typeof actionId === "string" && isSlackApprovalActionId(actionId);
+        })
+      );
+    }) ?? false
+  );
+}
+
 function buildSlackApprovalTerminalBlocks(params: {
   blocks: unknown[] | undefined;
   label: string;
@@ -671,26 +687,35 @@ async function handleSlackApprovalInteraction(params: {
     });
     const terminalLabel = resolveSlackApprovalTerminalLabel(result.approval);
     const prefix = result.applied ? "Resolved" : "Already resolved";
+    const messageBlocks = params.parsed.typedBody.message?.blocks;
+    // Native application results own their card; generic forwarded controls still need cleanup.
+    const preserveSystemAgentMessage =
+      result.approval.presentation.kind === "system-agent" &&
+      (messageBlocks?.some((rawBlock) => {
+        const block = asOptionalRecord(rawBlock);
+        return block?.type === "section" && block.block_id === SLACK_APPROVAL_HEADER_BLOCK_ID;
+      }) ||
+        !hasSlackApprovalControls(messageBlocks));
     let terminalized = false;
-    try {
-      // Always terminalize the clicked message. Generic forwarding does not retain
-      // a receipt for the resolved-event updater, and event/local updates may race.
-      const terminalText = `${prefix}: ${terminalLabel}`;
-      await updateSlackInteractionMessage({
-        ctx: params.ctx,
-        eventScope: params.eventScope,
-        channelId: params.parsed.channelId,
-        messageTs: params.parsed.messageTs,
-        text: truncateSlackText(terminalText, 4000),
-        blocks: buildSlackApprovalTerminalBlocks({
-          blocks: params.parsed.typedBody.message?.blocks,
-          label: terminalLabel,
-          prefix,
-        }),
-      });
-      terminalized = true;
-    } catch {
-      // Best-effort terminal presentation only; canonical Gateway state already won.
+    if (!preserveSystemAgentMessage) {
+      try {
+        const terminalText = `${prefix}: ${terminalLabel}`;
+        await updateSlackInteractionMessage({
+          ctx: params.ctx,
+          eventScope: params.eventScope,
+          channelId: params.parsed.channelId,
+          messageTs: params.parsed.messageTs,
+          text: truncateSlackText(terminalText, 4000),
+          blocks: buildSlackApprovalTerminalBlocks({
+            blocks: messageBlocks,
+            label: terminalLabel,
+            prefix,
+          }),
+        });
+        terminalized = true;
+      } catch {
+        // Best-effort terminal presentation only; canonical Gateway state already won.
+      }
     }
     if (!terminalized || !result.applied) {
       await respondEphemeral(
