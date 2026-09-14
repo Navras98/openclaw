@@ -58,13 +58,19 @@ the already-resolved tool set, but it cannot **add back** a tool removed
 by `tools.profile`.
 
 > **Empty `allow` means allow-all, not deny-all.** An explicit `allow: []`
-> is identical to omitting `allow`: every tool not denied stays allowed.
-> If you mean "no tools", use `deny: ["*"]`. Sole exception:
-> `tools.subagents.tools: { allow: [], alsoAllow: ["read"] }` resolves to
-> `["read"]`, while omitting `allow` leaves it undefined — they differ.
-> Every other scope stays permissive with `alsoAllow` (global/sandbox resolve
-> to `["*", ...alsoAllow]`), so `openclaw config validate` warns on every
-> empty `allow` list it finds (global `tools`, `tools.subagents.tools`,
+> resolves permissive: every tool not denied stays allowed. If you mean
+> "no tools", use `deny: ["*"]`.
+>
+> Adding `[]` is not always neutral versus omitting it. A nested agent
+> `sandbox.tools` without its own `allow` inherits the global
+> `tools.sandbox.tools.allow` list (or `DEFAULT_TOOL_ALLOW` when neither
+> is set), while writing `allow: []` there overrides the inheritance with
+> allow-all. Likewise, sandbox `[]` paired with `alsoAllow` still
+> resolves to `[]` — the extra entries cannot narrow it. Sole narrowing
+> exception: `tools.subagents.tools: { allow: [], alsoAllow: ["read"] }`
+> resolves to `["read"]`, while omitting `allow` leaves it undefined.
+>
+> So `openclaw config validate` warns on every empty `allow` list it finds (global `tools`, `tools.subagents.tools`,
 > `tools.sandbox.tools`, agent entry `tools`, `toolsBySender` and `byProvider`
 > overrides, nested agent `sandbox.tools`), except `tools.subagents.tools`
 > paired with a non-empty `alsoAllow`.
