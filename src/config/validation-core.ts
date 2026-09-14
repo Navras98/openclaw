@@ -107,6 +107,15 @@ export function collectEmptyAllowPolicyWarnings(config: OpenClawConfig): ConfigV
   return warnings;
 }
 
+/**
+ * Combined snapshot warnings for `openclaw config validate`: heartbeat owner
+ * plus explicit empty `allow: []` tool policies. Single call-site keeps
+ * `validation.ts` within its max-lines budget. Refs #147342.
+ */
+export function collectConfigValidationWarnings(config: OpenClawConfig): ConfigValidationIssue[] {
+  return [...collectHeartbeatOwnerWarnings(config), ...collectEmptyAllowPolicyWarnings(config)];
+}
+
 export function collectHeartbeatOwnerWarnings(config: OpenClawConfig): ConfigValidationIssue[] {
   const agentEntries = listAgentEntries(config);
   // Match heartbeat enrollment so validation never warns for an owner the runner can use.
