@@ -377,7 +377,19 @@ function hasBillingApiErrorType(raw: string): boolean {
   return isBillingErrorMessage(type) || isBillingErrorMessage(type.replaceAll("_", " "));
 }
 function hasStructuredThrottling429Code(raw: string): boolean {
-  return /\bThrottling\.[A-Za-z]+\b/.test(raw);
+  // Use terminal structured fields (parseApiErrorInfo unwraps the last
+  // ordered proxy attempt) so an earlier Throttling.* attempt cannot override
+  // a terminal billing error like insufficient_balance (#148275).
+  const THROTTLING_DOTTED_RE = /\bThrottling\.[A-Za-z]+\b/;
+  const info = parseApiErrorInfo(raw);
+  if (info && (info.code || info.type || info.message)) {
+    return Boolean(
+      (info.code && THROTTLING_DOTTED_RE.test(info.code)) ||
+      (info.type && THROTTLING_DOTTED_RE.test(info.type)) ||
+      (info.message && THROTTLING_DOTTED_RE.test(info.message)),
+    );
+  }
+  return THROTTLING_DOTTED_RE.test(raw);
 }
 // Bailian (qwen/dashscope/modelstudio family) returns 429+insufficient_quota for
 // TPS/TPM throttles; its real billing errors use PrepaidBillOverdue /
@@ -403,14 +415,23 @@ function isProviderThrottledQuota429(
   }
   return /\binsufficient[_ ]quota\b/i.test(message);
 }
-// A structured billing *type* other than the throttle code itself (e.g. real
-// Bailian billing codes like PrepaidBillOverdue) keeps the billing verdict.
+// A structured billing *code or type* other than the throttle marker itself
+// (e.g. real Bailian billing codes like PrepaidBillOverdue, or a terminal
+// insufficient_balance code paired with a generic type) keeps the billing
+// verdict. Both terminal fields are inspected before accepting the quota
+// exception, preserving billing precedence for mixed-field payloads (#148275).
 function hasNonQuotaStructuredBilling429Signal(message: string): boolean {
-  const type = normalizeOptionalLowercaseString(parseApiErrorInfo(message)?.type);
-  if (!type || /\binsufficient[_ ]quota\b/i.test(type)) {
+  const info = parseApiErrorInfo(message);
+  const candidates = [info?.type, info?.code]
+    .map((value) => normalizeOptionalLowercaseString(value))
+    .filter((value): value is string => Boolean(value));
+  const nonQuota = candidates.filter((value) => !/\binsufficient[_ ]quota\b/i.test(value));
+  if (nonQuota.length === 0) {
     return false;
   }
-  return isBillingErrorMessage(type) || isBillingErrorMessage(type.replaceAll("_", " "));
+  return nonQuota.some(
+    (value) => isBillingErrorMessage(value) || isBillingErrorMessage(value.replaceAll("_", " ")),
+  );
 }
 function isAmbiguousGeneric429BalanceMessage(raw: string): boolean {
   return /\binsufficient\s+account\s+balance\b/i.test(raw) && !hasStructuredBilling429Signal(raw);
