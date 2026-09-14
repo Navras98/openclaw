@@ -74,7 +74,7 @@ function pushEmptyAllowWarning(
  * `alsoAllow` (sub-agent merge keeps the alsoAllow list, so it is not
  * allow-all). Refs #147342.
  */
-export function collectEmptyAllowPolicyWarnings(config: OpenClawConfig): ConfigValidationIssue[] {
+function collectEmptyAllowPolicyWarnings(config: OpenClawConfig): ConfigValidationIssue[] {
   const warnings: ConfigValidationIssue[] = [];
   pushEmptyAllowWarning(warnings, "tools", config.tools);
   const globalBySender: unknown = config.tools?.toolsBySender;
@@ -116,7 +116,7 @@ export function collectConfigValidationWarnings(config: OpenClawConfig): ConfigV
   return [...collectHeartbeatOwnerWarnings(config), ...collectEmptyAllowPolicyWarnings(config)];
 }
 
-export function collectHeartbeatOwnerWarnings(config: OpenClawConfig): ConfigValidationIssue[] {
+function collectHeartbeatOwnerWarnings(config: OpenClawConfig): ConfigValidationIssue[] {
   const agentEntries = listAgentEntries(config);
   // Match heartbeat enrollment so validation never warns for an owner the runner can use.
   const unresolved =

@@ -1,14 +1,16 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "./types.js";
-import { collectEmptyAllowPolicyWarnings } from "./validation-core.js";
+import { collectConfigValidationWarnings } from "./validation-core.js";
 
 function configWith(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
 }
 
-describe("collectEmptyAllowPolicyWarnings", () => {
-  it("warns for an empty allow list on global tools (#147342)", () => {
-    const warnings = collectEmptyAllowPolicyWarnings(
+// All fixtures stay at zero or one agent so the heartbeat-owner warning
+// never fires; every warning below comes from the empty-allow collector.
+describe("collectConfigValidationWarnings empty allow (#147342)", () => {
+  it("warns for an empty allow list on global tools", () => {
+    const warnings = collectConfigValidationWarnings(
       configWith({ tools: { allow: [], deny: ["dangerous-*"] } }),
     );
     expect(warnings).toHaveLength(1);
@@ -17,7 +19,7 @@ describe("collectEmptyAllowPolicyWarnings", () => {
   });
 
   it("warns per sender in toolsBySender", () => {
-    const warnings = collectEmptyAllowPolicyWarnings(
+    const warnings = collectConfigValidationWarnings(
       configWith({
         tools: {
           toolsBySender: {
@@ -32,7 +34,7 @@ describe("collectEmptyAllowPolicyWarnings", () => {
   });
 
   it("warns for agent entry tools and their sender overrides", () => {
-    const warnings = collectEmptyAllowPolicyWarnings(
+    const warnings = collectConfigValidationWarnings(
       configWith({
         agents: {
           entries: {
@@ -42,7 +44,6 @@ describe("collectEmptyAllowPolicyWarnings", () => {
                 toolsBySender: { "e164:+390000000000": { allow: [] } },
               },
             },
-            main: { tools: { allow: ["read"] } },
           },
         },
       }),
@@ -55,7 +56,7 @@ describe("collectEmptyAllowPolicyWarnings", () => {
   });
 
   it("warns for sub-agent and sandbox tools scopes", () => {
-    const warnings = collectEmptyAllowPolicyWarnings(
+    const warnings = collectConfigValidationWarnings(
       configWith({
         tools: {
           subagents: { tools: { allow: [] } },
@@ -68,7 +69,7 @@ describe("collectEmptyAllowPolicyWarnings", () => {
   });
 
   it("stays silent when allow: [] is paired with a non-empty alsoAllow", () => {
-    const warnings = collectEmptyAllowPolicyWarnings(
+    const warnings = collectConfigValidationWarnings(
       configWith({
         tools: {
           subagents: { tools: { allow: [], alsoAllow: ["read"] } },
@@ -81,13 +82,13 @@ describe("collectEmptyAllowPolicyWarnings", () => {
   });
 
   it("stays silent when allow is omitted, non-empty, or absent", () => {
-    const warnings = collectEmptyAllowPolicyWarnings(
+    const warnings = collectConfigValidationWarnings(
       configWith({
         tools: { deny: ["*"] },
         agents: { entries: { main: { tools: { allow: ["read"] } } } },
       }),
     );
     expect(warnings).toEqual([]);
-    expect(collectEmptyAllowPolicyWarnings(configWith({}))).toEqual([]);
+    expect(collectConfigValidationWarnings(configWith({}))).toEqual([]);
   });
 });
