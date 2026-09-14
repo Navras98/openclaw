@@ -215,8 +215,40 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
             turnSourceAccountId: " topic-1 ",
           },
         } as never,
+        nativeRouteActive: true,
       }),
     ).toBe(true);
+
+    expect(
+      shouldSuppressForwardingFallback({
+        cfg: {} as never,
+        approvalKind: "exec",
+        target: { channel: "telegram", to: "target-1" },
+        request: {
+          request: {
+            command: "pwd",
+            turnSourceChannel: "telegram",
+            turnSourceAccountId: "topic-1",
+          },
+        } as never,
+        nativeRouteActive: false,
+      }),
+    ).toBe(false);
+
+    expect(
+      shouldSuppressForwardingFallback({
+        cfg: {} as never,
+        approvalKind: "exec",
+        target: { channel: "telegram", to: "target-1" },
+        request: {
+          request: {
+            command: "pwd",
+            turnSourceChannel: "telegram",
+            turnSourceAccountId: "topic-1",
+          },
+        } as never,
+      }),
+    ).toBe(false);
 
     expect(
       shouldSuppressForwardingFallback({
@@ -265,6 +297,7 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
             turnSourceAccountId: "topic-1",
           },
         } as never,
+        nativeRouteActive: true,
       }),
     ).toBe(true);
   });
@@ -508,8 +541,18 @@ describe("createApproverRestrictedNativeApprovalCapability", () => {
         approvalKind: "exec",
         target: { channel: "example", to: "ORIGIN", source: "target" },
         request,
+        nativeRouteActive: true,
       }),
     ).toBe(true);
+    expect(
+      routed.capability.delivery?.shouldSuppressForwardingFallback?.({
+        cfg,
+        approvalKind: "exec",
+        target: { channel: "example", to: "ORIGIN", source: "target" },
+        request,
+        nativeRouteActive: false,
+      }),
+    ).toBe(false);
     expect(routed.routing.isNativeApprovalHandlerConfigured({ cfg })).toBe(true);
   });
 });

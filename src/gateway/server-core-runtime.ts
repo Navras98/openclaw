@@ -1,7 +1,9 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { isCoreCanvasHostEnabled } from "../canvas/config.js";
 import { withCoreCanvasNodeCapability } from "../canvas/constants.js";
+import type { ChannelId } from "../channels/plugins/types.core.js";
 import { getRuntimeConfig } from "../config/io.js";
+import type { ChannelApprovalKind } from "../infra/approval-types.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { adoptPluginHttpRouteHandoffs } from "../plugins/http-registry.js";
 import { isGatewayWorkAdmissionClosed } from "../process/gateway-work-admission.js";
@@ -323,6 +325,14 @@ export async function startGatewayCoreRuntime(input: {
         clients,
         channelManager,
         getChannelAutostartSuppression: channelManager.getAutostartSuppression,
+        hasActiveNativeApprovalRuntime: (params) =>
+          channelManager.hasActiveNativeApprovalRuntime(
+            params as {
+              approvalKind: ChannelApprovalKind;
+              channel: ChannelId;
+              accountId?: string | null;
+            },
+          ),
         logChannels,
         registerWorkerTurnClaimClosedHandler: workerEnvironmentStartup?.placementStore
           ? (handler) =>

@@ -566,6 +566,11 @@ type ChannelApprovalDeliveryAdapter = {
     approvalKind: ChannelApprovalKind;
     target: ChannelApprovalForwardTarget;
     request: ExecApprovalRequest | PluginApprovalRequest | SystemAgentApprovalRequest;
+    /**
+     * Whether a native approval runtime is active for this channel/account.
+     * Suppression applies only when exactly true; absent means the fallback stays.
+     */
+    nativeRouteActive?: boolean;
   }) => boolean;
 };
 type ChannelApproveCommandBehavior =

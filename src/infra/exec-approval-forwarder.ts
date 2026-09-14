@@ -88,6 +88,16 @@ type ExecApprovalForwarderDeps = {
   deliver?: DeliverApprovalPayloads;
   nowMs?: () => number;
   resolveSessionTarget?: ResolveSessionTargetFn;
+  /**
+   * Whether a native approval runtime is active for a forwarding target.
+   * The gateway wires this to its instance route coordinator; when absent,
+   * the fallback is kept (a duplicate prompt beats a lost approval).
+   */
+  hasActiveNativeRuntime?: (params: {
+    approvalKind: ChannelApprovalKind;
+    channel: string;
+    accountId?: string | null;
+  }) => boolean;
 };
 
 const SYNTHETIC_APPROVAL_REQUEST_ID = "__approval-routing__";
@@ -149,20 +159,32 @@ function shouldSkipForwardingFallback(params: {
   target: ExecApprovalForwardTarget;
   cfg: OpenClawConfig;
   routeRequest: ApprovalRouteRequest;
+  hasActiveNativeRuntime?: ExecApprovalForwarderDeps["hasActiveNativeRuntime"];
 }): boolean {
   const channel = normalizeMessageChannel(params.target.channel) ?? params.target.channel;
   if (!channel) {
     return false;
   }
   // Channel adapters can suppress generic fallback delivery when they already
-  // own native approval UX for the same target.
+  // own native approval UX for the same target — but only while a native
+  // runtime is proven active; otherwise the fallback is the only prompt.
   const adapter = resolveChannelApprovalAdapter(getLoadedChannelPlugin(channel));
+  if (!adapter?.delivery?.shouldSuppressForwardingFallback) {
+    return false;
+  }
+  const accountId =
+    params.target.accountId?.trim() || params.routeRequest.turnSourceAccountId?.trim() || undefined;
   return (
-    adapter?.delivery?.shouldSuppressForwardingFallback?.({
+    adapter.delivery.shouldSuppressForwardingFallback({
       cfg: params.cfg,
       approvalKind: params.approvalKind,
       target: params.target,
       request: buildSyntheticApprovalRequest(params.routeRequest),
+      nativeRouteActive: params.hasActiveNativeRuntime?.({
+        approvalKind: params.approvalKind,
+        channel,
+        accountId,
+      }),
     }) ?? false
   );
 }
@@ -327,6 +349,7 @@ function createApprovalHandlers<
   deliver: DeliverApprovalPayloads;
   nowMs: () => number;
   resolveSessionTarget: ResolveSessionTargetFn;
+  hasActiveNativeRuntime?: ExecApprovalForwarderDeps["hasActiveNativeRuntime"];
 }) {
   const pending = createPendingApprovalRegistry<PendingApproval>();
   const work = new AsyncWorkScope();
@@ -355,6 +378,7 @@ function createApprovalHandlers<
           target,
           cfg: paramsForRoute.cfg,
           routeRequest: paramsForRoute.routeRequest,
+          hasActiveNativeRuntime: params.hasActiveNativeRuntime,
         }),
     );
   };
@@ -524,6 +548,7 @@ export function createExecApprovalForwarder(
     deliver,
     nowMs,
     resolveSessionTarget,
+    hasActiveNativeRuntime: deps.hasActiveNativeRuntime,
   });
   const pluginHandlers = createApprovalHandlers({
     strategy: pluginApprovalStrategy,
@@ -531,6 +556,7 @@ export function createExecApprovalForwarder(
     deliver,
     nowMs,
     resolveSessionTarget,
+    hasActiveNativeRuntime: deps.hasActiveNativeRuntime,
   });
 
   return {

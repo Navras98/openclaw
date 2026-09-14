@@ -84,6 +84,16 @@ export function createGatewayAuxHandlers(
     validateAgentRuntimeDelegatedAuthority?: (authority: AgentRuntimeDelegatedAuthority) => boolean;
     /** Abort-wins guard: a tombstoned run must not mint standing authority. */
     hasRunAbortMarker?: (runId: string) => boolean;
+    /**
+     * Whether a native approval handler runtime is active for a channel/account.
+     * Wired to the gateway instance route coordinator; when absent the
+     * forwarder keeps the text fallback (duplicate beats lost).
+     */
+    hasActiveNativeApprovalRuntime?: (params: {
+      approvalKind: ChannelApprovalKind;
+      channel: string;
+      accountId?: string | null;
+    }) => boolean;
     /** Config-driven default expiry stamp for freshly minted standing grants. */
     resolveGrantDefaultExpiresAtMs?: (nowMs: number) => number | null;
     chatAbortControllers?: Map<string, ChatAbortControllerEntry>;
@@ -159,7 +169,9 @@ export function createGatewayAuxHandlers(
       };
     },
   );
-  const execApprovalForwarder = createExecApprovalForwarder();
+  const execApprovalForwarder = createExecApprovalForwarder({
+    hasActiveNativeRuntime: params.hasActiveNativeApprovalRuntime,
+  });
   const approvalWebPushDelivery = createApprovalWebPushDelivery({
     getRuntimeConfig,
     log: params.log,

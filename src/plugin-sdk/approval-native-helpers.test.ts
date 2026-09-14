@@ -628,6 +628,7 @@ describe("createNativeApprovalForwardingFallbackSuppressor", () => {
         approvalKind: "exec",
         target: { channel: "matrix", to: "room-1", source: "session" },
         request: execRequest,
+        nativeRouteActive: true,
       }),
     ).toBe(true);
     expect(
@@ -636,6 +637,7 @@ describe("createNativeApprovalForwardingFallbackSuppressor", () => {
         approvalKind: "exec",
         target: { channel: "matrix", to: "user-1", source: "session" },
         request: execRequest,
+        nativeRouteActive: true,
       }),
     ).toBe(true);
     expect(
@@ -644,6 +646,16 @@ describe("createNativeApprovalForwardingFallbackSuppressor", () => {
         approvalKind: "exec",
         target: { channel: "matrix", to: "other-room", source: "session" },
         request: execRequest,
+        nativeRouteActive: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldSuppress({
+        cfg: {},
+        approvalKind: "exec",
+        target: { channel: "matrix", to: "room-1", source: "session" },
+        request: execRequest,
+        nativeRouteActive: false,
       }),
     ).toBe(false);
   });
@@ -666,6 +678,7 @@ describe("createNativeApprovalForwardingFallbackSuppressor", () => {
         approvalKind: "exec",
         target: { channel: "matrix", to: "room-1", source: "target" },
         request: execRequest,
+        nativeRouteActive: true,
       }),
     ).toBe(true);
   });

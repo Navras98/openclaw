@@ -31,6 +31,7 @@ import { withGatewayNativeApprovalRuntime } from "../infra/approval-gateway-runt
 import type { GatewayNativeApprovalMethod } from "../infra/approval-gateway-runtime-methods.js";
 import type { GatewayNativeApprovalRuntime } from "../infra/approval-gateway-runtime.types.js";
 import { startChannelApprovalHandlerBootstrap } from "../infra/approval-handler-bootstrap.js";
+import type { ChannelApprovalKind } from "../infra/approval-types.js";
 import { type BackoffPolicy, sleepWithAbort } from "../infra/backoff.js";
 import {
   createTaskScopedChannelRuntime,
@@ -293,6 +294,16 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   pruneInactiveChannelAccountState: (activeChannelIds: ReadonlySet<ChannelId>) => void;
   resolveRuntimeAccountId: (channelId: ChannelId, accountId: string) => string | undefined;
   hasCurrentAccountTask: (channelId: ChannelId, accountId: string) => boolean;
+  /**
+   * Whether a native approval handler runtime is started for a channel/account.
+   * Reads the gateway instance route coordinator (handler start/stop truth),
+   * not task existence — a running account task with a failed handler counts as down.
+   */
+  hasActiveNativeApprovalRuntime: (params: {
+    approvalKind: ChannelApprovalKind;
+    channel: ChannelId;
+    accountId?: string | null;
+  }) => boolean;
 } {
   const {
     getRuntimeConfig,
@@ -1788,6 +1799,12 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       );
       return matches.length === 1 ? matches[0] : undefined;
     },
+    hasActiveNativeApprovalRuntime: ({ channel, accountId, approvalKind }) =>
+      opts.getNativeApprovalRuntime?.().routeCoordinator.hasActiveRuntime({
+        approvalKind,
+        channel,
+        accountId,
+      }) ?? false,
     isAutoRestartScheduled,
     resetRestartAttempts,
     isHealthMonitorEnabled,

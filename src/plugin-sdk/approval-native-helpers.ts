@@ -717,6 +717,11 @@ export function createNativeApprovalForwardingFallbackSuppressor<
       nativeApprovalTargetsMatch({ channel: params.channel, left, right }));
 
   return (input: DeliverySuppressionInput): boolean => {
+    // A configured handler that is not running sends no prompt: keep the
+    // fallback unless a native runtime is proven active for this target.
+    if (input.nativeRouteActive !== true) {
+      return false;
+    }
     const forwardingTarget = params.normalizeForwardTarget(input.target);
     if (!forwardingTarget) {
       return false;

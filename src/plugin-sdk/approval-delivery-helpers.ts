@@ -45,6 +45,12 @@ type DeliverySuppressionParams = {
   target: { channel: string; accountId?: string | null };
   /** Approval request metadata, including original turn source when available. */
   request: { request: { turnSourceChannel?: string | null; turnSourceAccountId?: string | null } };
+  /**
+   * Whether a native approval runtime is active for this channel/account.
+   * Mirrors the local-prompt hint: suppression applies only when this is
+   * exactly true, so a configured-but-not-running handler keeps the fallback.
+   */
+  nativeRouteActive?: boolean;
 };
 
 type ApproverRestrictedNativeApprovalCommonParams = {
@@ -354,6 +360,11 @@ function buildApproverRestrictedNativeApprovalCapability(
           return target === "dm" || target === "both";
         }),
       shouldSuppressForwardingFallback: (input: DeliverySuppressionParams) => {
+        // A configured handler that is not running sends no prompt: keep the
+        // fallback unless a native runtime is proven active for this target.
+        if (input.nativeRouteActive !== true) {
+          return false;
+        }
         const channel = normalizeMessageChannel(input.target.channel) ?? input.target.channel;
         if (channel !== params.channel) {
           return false;
