@@ -52,15 +52,25 @@ function pushEmptyAllowWarning(
   warnings: ConfigValidationIssue[],
   policyPath: string,
   policy: unknown,
+  opts?: { alsoAllowNarrows?: boolean },
 ): void {
   if (!isRecord(policy)) {
     return;
   }
   const allow: unknown = policy.allow;
   if (Array.isArray(allow) && allow.length === 0) {
-    const alsoAllow: unknown = policy.alsoAllow;
-    if (Array.isArray(alsoAllow) && alsoAllow.length > 0) {
-      return;
+    // Only the sub-agent resolver narrows `allow: [] + alsoAllow` to the
+    // alsoAllow list (`mergeConfiguredSubagentAllow` in
+    // `src/agents/agent-tools.policy.ts:87-89`). Global/sandbox resolvers stay
+    // permissive (`pickSandboxToolPolicy` in `src/agents/sandbox-tool-policy.ts`
+    // maps it to `["*", ...alsoAllow]`; `mergeAllowlist` in
+    // `src/agents/sandbox/tool-policy.ts:54-62` preserves `[]`), so suppress
+    // only where narrowing is proven.
+    if (opts?.alsoAllowNarrows === true) {
+      const alsoAllow: unknown = policy.alsoAllow;
+      if (Array.isArray(alsoAllow) && alsoAllow.length > 0) {
+        return;
+      }
     }
     warnings.push({ path: policyPath, message: EMPTY_ALLOW_POLICY_MESSAGE });
   }
@@ -70,9 +80,9 @@ function pushEmptyAllowWarning(
  * Warns for explicit `allow: []` tool policies. An empty allow list reads as
  * "no tools" but the matcher treats it as allow-all (same as omitting
  * allow), so validation stays silent on a security UX trap. Warn-only: no
- * runtime semantics change. Skips `allow: []` paired with a non-empty
- * `alsoAllow` (sub-agent merge keeps the alsoAllow list, so it is not
- * allow-all). Refs #147342.
+ * runtime semantics change. The `alsoAllow` suppression applies only to
+ * `tools.subagents.tools`, the single scope where the runtime narrows instead
+ * of staying permissive. Refs #147342.
  */
 function collectEmptyAllowPolicyWarnings(config: OpenClawConfig): ConfigValidationIssue[] {
   const warnings: ConfigValidationIssue[] = [];
@@ -83,11 +93,19 @@ function collectEmptyAllowPolicyWarnings(config: OpenClawConfig): ConfigValidati
       pushEmptyAllowWarning(warnings, `tools.toolsBySender.${sender}`, policy);
     }
   }
+  const globalByProvider: unknown = config.tools?.byProvider;
+  if (isRecord(globalByProvider)) {
+    for (const [provider, policy] of Object.entries(globalByProvider)) {
+      pushEmptyAllowWarning(warnings, `tools.byProvider.${provider}`, policy);
+    }
+  }
   const toolsNode: unknown = config.tools;
   if (isRecord(toolsNode)) {
     const subagentsNode: unknown = toolsNode.subagents;
     if (isRecord(subagentsNode)) {
-      pushEmptyAllowWarning(warnings, "tools.subagents.tools", subagentsNode.tools);
+      pushEmptyAllowWarning(warnings, "tools.subagents.tools", subagentsNode.tools, {
+        alsoAllowNarrows: true,
+      });
     }
     const sandboxNode: unknown = toolsNode.sandbox;
     if (isRecord(sandboxNode)) {
@@ -97,11 +115,22 @@ function collectEmptyAllowPolicyWarnings(config: OpenClawConfig): ConfigValidati
   for (const entry of listAgentEntries(config)) {
     const base = `agents.entries.${entry.id}.tools`;
     pushEmptyAllowWarning(warnings, base, entry.tools);
-    const bySender: unknown = isRecord(entry.tools) ? entry.tools.toolsBySender : undefined;
+    const toolsRecord: unknown = entry.tools;
+    const bySender: unknown = isRecord(toolsRecord) ? toolsRecord.toolsBySender : undefined;
     if (isRecord(bySender)) {
       for (const [sender, policy] of Object.entries(bySender)) {
         pushEmptyAllowWarning(warnings, `${base}.toolsBySender.${sender}`, policy);
       }
+    }
+    const byProvider: unknown = isRecord(toolsRecord) ? toolsRecord.byProvider : undefined;
+    if (isRecord(byProvider)) {
+      for (const [provider, policy] of Object.entries(byProvider)) {
+        pushEmptyAllowWarning(warnings, `${base}.byProvider.${provider}`, policy);
+      }
+    }
+    const sandboxNode: unknown = isRecord(toolsRecord) ? toolsRecord.sandbox : undefined;
+    if (isRecord(sandboxNode)) {
+      pushEmptyAllowWarning(warnings, `${base}.sandbox.tools`, sandboxNode.tools);
     }
   }
   return warnings;

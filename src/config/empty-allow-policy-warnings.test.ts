@@ -68,7 +68,7 @@ describe("collectConfigValidationWarnings empty allow (#147342)", () => {
     expect(paths).toEqual(["tools.sandbox.tools", "tools.subagents.tools"]);
   });
 
-  it("stays silent when allow: [] is paired with a non-empty alsoAllow", () => {
+  it("stays silent only for sub-agent allow: [] paired with alsoAllow", () => {
     const warnings = collectConfigValidationWarnings(
       configWith({
         tools: {
@@ -79,6 +79,44 @@ describe("collectConfigValidationWarnings empty allow (#147342)", () => {
     );
     const paths = warnings.map((warning) => warning.path).toSorted();
     expect(paths).toEqual(["tools"]);
+  });
+
+  it("warns for global and sandbox allow: [] even with alsoAllow", () => {
+    const warnings = collectConfigValidationWarnings(
+      configWith({
+        tools: {
+          allow: [],
+          alsoAllow: ["read"],
+          sandbox: { tools: { allow: [], alsoAllow: ["read"] } },
+        },
+      }),
+    );
+    const paths = warnings.map((warning) => warning.path).toSorted();
+    expect(paths).toEqual(["tools", "tools.sandbox.tools"]);
+  });
+
+  it("warns for byProvider and nested agent sandbox scopes", () => {
+    const warnings = collectConfigValidationWarnings(
+      configWith({
+        tools: { byProvider: { openai: { allow: [] } } },
+        agents: {
+          entries: {
+            chat: {
+              tools: {
+                byProvider: { anthropic: { allow: [] } },
+                sandbox: { tools: { allow: [] } },
+              },
+            },
+          },
+        },
+      }),
+    );
+    const paths = warnings.map((warning) => warning.path).toSorted();
+    expect(paths).toEqual([
+      "agents.entries.chat.tools.byProvider.anthropic",
+      "agents.entries.chat.tools.sandbox.tools",
+      "tools.byProvider.openai",
+    ]);
   });
 
   it("stays silent when allow is omitted, non-empty, or absent", () => {

@@ -57,13 +57,17 @@ By default, sub-agents below depth `5` receive `sessions_spawn`, `subagents`,
 the already-resolved tool set, but it cannot **add back** a tool removed
 by `tools.profile`.
 
-> **Empty `allow` means allow-all, not deny-all — except with `alsoAllow`.** An explicit `allow: []`
-> with no `alsoAllow` is identical to omitting `allow`: every tool not denied stays allowed.
-> If you mean "no tools", use `deny: ["*"]`. Exception: `tools.subagents.tools: { allow: [], alsoAllow: ["read"] }`
-> resolves to `["read"]`, while omitting `allow` leaves it undefined — they differ.
-> `openclaw config validate` warns on every empty `allow` list it finds (global `tools`,
-> `tools.subagents.tools`, `tools.sandbox.tools`, agent entry `tools`, and `toolsBySender` overrides),
-> except `allow: []` paired with a non-empty `alsoAllow`.
+> **Empty `allow` means allow-all, not deny-all.** An explicit `allow: []`
+> is identical to omitting `allow`: every tool not denied stays allowed.
+> If you mean "no tools", use `deny: ["*"]`. Sole exception:
+> `tools.subagents.tools: { allow: [], alsoAllow: ["read"] }` resolves to
+> `["read"]`, while omitting `allow` leaves it undefined — they differ.
+> Every other scope stays permissive with `alsoAllow` (global/sandbox resolve
+> to `["*", ...alsoAllow]`), so `openclaw config validate` warns on every
+> empty `allow` list it finds (global `tools`, `tools.subagents.tools`,
+> `tools.sandbox.tools`, agent entry `tools`, `toolsBySender` and `byProvider`
+> overrides, nested agent `sandbox.tools`), except `tools.subagents.tools`
+> paired with a non-empty `alsoAllow`.
 
 For example, `tools.profile: "coding"` includes
 `web_search`/`web_fetch` but not the `browser` tool. To let
