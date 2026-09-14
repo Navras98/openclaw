@@ -1800,7 +1800,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       return matches.length === 1 ? matches[0] : undefined;
     },
     hasActiveNativeApprovalRuntime: ({ channel, accountId, approvalKind }) =>
-      opts.getNativeApprovalRuntime?.().routeCoordinator.hasActiveRuntime({
+      opts.getNativeApprovalRuntime?.()?.routeCoordinator.hasActiveRuntime({
         approvalKind,
         channel,
         accountId,
