@@ -7,6 +7,7 @@ import {
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
 } from "../daemon/constants.js";
+import { appendGatewayLifecycleAuditLog } from "../daemon/restart-logs.js";
 import { abortPendingChannelReloads } from "../gateway/server-reload-generation.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -243,6 +244,16 @@ function emitGatewayRestart(reasonOverride?: string, intent?: GatewayRestartInte
     rollBackGatewayRestartEmission();
     return false;
   }
+  // Self-emitted restarts (deferred reload recovery, scheduled restarts) never
+  // pass through the CLI, so without this they stay invisible in
+  // gateway-restart.log and outages cannot be attributed to an actor.
+  appendGatewayLifecycleAuditLog(process.env, {
+    action: "restart",
+    source: "self",
+    mode: "sigusr1",
+    pid: process.pid,
+    interactive: false,
+  });
   lastRestartEmittedAt = monotonicNow();
   return true;
 }
