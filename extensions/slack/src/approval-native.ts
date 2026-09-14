@@ -192,6 +192,12 @@ export const slackApprovalCapability: ChannelApprovalCapability = {
   delivery: {
     ...baseSlackApprovalCapability.delivery,
     shouldSuppressForwardingFallback: (input) => {
+      // Residual scope closed here too: config-only suppression is not
+      // allowed, even on the Slack exec fast path. The forwarder also
+      // enforces this centrally before invoking channel overrides.
+      if (input.nativeRouteActive !== true) {
+        return false;
+      }
       if (!shouldConsiderSlackNativeForwardingSuppression(input)) {
         return false;
       }

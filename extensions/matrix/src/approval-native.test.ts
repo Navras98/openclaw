@@ -128,32 +128,35 @@ describe("matrix approval capability", () => {
       throw new Error("delivery suppression helper unavailable");
     }
 
-    expect(
-      shouldSuppress({
-        cfg: buildConfig({
-          dm: { allowFrom: ["@owner:example.org"] },
-        }),
-        approvalKind: "plugin",
-        target: {
-          channel: "matrix",
-          to: "room:!ops:example.org",
-          accountId: "default",
-        },
+    const input = {
+      cfg: buildConfig({
+        dm: { allowFrom: ["@owner:example.org"] },
+      }),
+      approvalKind: "plugin",
+      target: {
+        channel: "matrix",
+        to: "room:!ops:example.org",
+        accountId: "default",
+      },
+      request: {
+        id: "plugin:req-1",
         request: {
-          id: "plugin:req-1",
-          request: {
-            title: "Plugin Approval Required",
-            description: "Allow plugin action",
-            pluginId: "git-tools",
-            turnSourceChannel: "matrix",
-            turnSourceTo: "room:!ops:example.org",
-            turnSourceAccountId: "default",
-          },
-          createdAtMs: 0,
-          expiresAtMs: 1000,
+          title: "Plugin Approval Required",
+          description: "Allow plugin action",
+          pluginId: "git-tools",
+          turnSourceChannel: "matrix",
+          turnSourceTo: "room:!ops:example.org",
+          turnSourceAccountId: "default",
         },
-      } as never),
-    ).toBe(true);
+        createdAtMs: 0,
+        expiresAtMs: 1000,
+      },
+    } as never;
+    // Active native runtime retains deduplication.
+    expect(shouldSuppress({ ...input, nativeRouteActive: true } as never)).toBe(true);
+    // Inactive runtime keeps the fallback (false + omitted).
+    expect(shouldSuppress({ ...input, nativeRouteActive: false } as never)).toBe(false);
+    expect(shouldSuppress(input)).toBe(false);
   });
 
   it("preserves room-id case when matching Matrix origin targets", async () => {
@@ -411,8 +414,22 @@ describe("matrix approval capability", () => {
           accountId: "default",
         },
         request,
+        nativeRouteActive: true,
       } as never),
     ).toBe(true);
+    expect(
+      matrixApprovalCapability.delivery?.shouldSuppressForwardingFallback?.({
+        cfg,
+        approvalKind: "plugin",
+        target: {
+          channel: "matrix",
+          to: "room:!ops:example.org",
+          accountId: "default",
+        },
+        request,
+        nativeRouteActive: false,
+      } as never),
+    ).toBe(false);
     expect(
       matrixApprovalCapability.nativeRuntime?.availability.shouldHandle({
         cfg,

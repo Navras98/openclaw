@@ -1027,8 +1027,29 @@ describe("slack native approval adapter", () => {
           createdAtMs: 0,
           expiresAtMs: 1_000,
         },
+        nativeRouteActive: true,
       }),
     ).toBe(true);
+
+    // Inactive native runtime keeps the fallback even for slack-originated approvals.
+    expect(
+      shouldSuppress({
+        cfg: buildConfig(),
+        approvalKind: "exec",
+        target: { channel: "slack", to: "channel:C123ROOM", accountId: "default" },
+        request: {
+          id: "approval-1",
+          request: {
+            command: "echo hi",
+            turnSourceChannel: "slack",
+            turnSourceAccountId: "default",
+          },
+          createdAtMs: 0,
+          expiresAtMs: 1_000,
+        },
+        nativeRouteActive: false,
+      }),
+    ).toBe(false);
 
     expect(
       shouldSuppress({

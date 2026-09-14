@@ -174,17 +174,24 @@ function shouldSkipForwardingFallback(params: {
   }
   const accountId =
     params.target.accountId?.trim() || params.routeRequest.turnSourceAccountId?.trim() || undefined;
+  // Core-owned activity gate: custom channel overrides must not suppress the
+  // fallback on configuration alone. When the gateway wires a runtime check,
+  // a non-true answer keeps the fallback without consulting the adapter.
+  const nativeRouteActive = params.hasActiveNativeRuntime?.({
+    approvalKind: params.approvalKind,
+    channel,
+    accountId,
+  });
+  if (params.hasActiveNativeRuntime && nativeRouteActive !== true) {
+    return false;
+  }
   return (
     adapter.delivery.shouldSuppressForwardingFallback({
       cfg: params.cfg,
       approvalKind: params.approvalKind,
       target: params.target,
       request: buildSyntheticApprovalRequest(params.routeRequest),
-      nativeRouteActive: params.hasActiveNativeRuntime?.({
-        approvalKind: params.approvalKind,
-        channel,
-        accountId,
-      }),
+      nativeRouteActive,
     }) ?? false
   );
 }

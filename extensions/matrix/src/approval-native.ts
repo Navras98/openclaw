@@ -267,6 +267,11 @@ type MatrixForwardingSuppressionParams = Parameters<
 const matrixDeliveryAdapter = matrixBaseDeliveryAdapter && {
   ...matrixBaseDeliveryAdapter,
   shouldSuppressForwardingFallback: (params: MatrixForwardingSuppressionParams) => {
+    // Residual scope closed here too: the Matrix plugin fast path must not
+    // suppress on configuration alone. The forwarder also gates centrally.
+    if (params.nativeRouteActive !== true) {
+      return false;
+    }
     const accountId = resolveSuppressionAccountId(params);
     if (
       !hasMatrixApprovalApprovers({
