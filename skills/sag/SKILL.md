@@ -7,7 +7,7 @@ metadata:
     "openclaw":
       {
         "emoji": "🔊",
-        "requires": { "bins": ["sag"], "anyEnv": ["ELEVENLABS_API_KEY", "SAG_API_KEY"] },
+        "requires": { "bins": ["sag"] },
         "primaryEnv": "ELEVENLABS_API_KEY",
         "install":
           [
