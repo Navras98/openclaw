@@ -1321,6 +1321,40 @@ describe("runGatewayLoop", () => {
     });
   });
 
+  it("carries the server close error into the stability bundle on restart close failure", async () => {
+    vi.clearAllMocks();
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const closeError = new TypeError("close owner failed");
+      const close = vi.fn<GatewayCloseFn>(async () => {
+        throw closeError;
+      });
+      const { start, started } = createSignaledStart(close);
+      const { runtime, exited } = createRuntimeWithExitSignal();
+      await runLoopWithStart({ start, runtime });
+      await waitForStart(started);
+      const stop = captureSignal("SIGINT");
+      try {
+        captureSignal("SIGUSR1")();
+        await waitForLoopCondition(
+          () => runtime.exit.mock.calls.length > 0 || start.mock.calls.length > 1,
+          "expected restart close failure to exit or start a new lifecycle",
+        );
+        expect(runtime.exit).toHaveBeenCalledWith(1);
+        await expect(exited).resolves.toBe(1);
+        expect(writeDiagnosticStabilityBundleForFailureSync).toHaveBeenCalledWith(
+          "gateway.restart_close_failed",
+          closeError,
+        );
+      } finally {
+        if (runtime.exit.mock.calls.length === 0) {
+          stop();
+        }
+        await exited;
+      }
+    });
+  });
+
   it.each(["ordinary", "managed restoration"] as const)(
     "exits instead of starting a new lifecycle when restart close fails during %s",
     async (mode) => {

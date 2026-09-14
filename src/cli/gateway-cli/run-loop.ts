@@ -387,14 +387,14 @@ export async function runGatewayLoop(params: {
       return false;
     }
   };
-  const forceExitAfterStabilityBundle = async (reason: string, exitCode = 1) => {
+  const forceExitAfterStabilityBundle = async (reason: string, exitCode = 1, error?: unknown) => {
     if (forcedExitStarted) {
       return;
     }
     forcedExitStarted = true;
     void hostLifecycle?.retire();
     try {
-      writeStabilityBundle(reason);
+      writeStabilityBundle(reason, error);
     } finally {
       const owner = getManagedUpdateOwner();
       if (owner) {
@@ -716,6 +716,7 @@ export async function runGatewayLoop(params: {
     let hardExitWatchdog: ShutdownHardExitWatchdog | null = null;
     let lastDrainCounts = "not observed";
     let shutdownFailed = false;
+    let closeError: unknown;
     const armForceExitTimer = (forceExitMs: number) => {
       if (forceExitTimer) {
         return;
@@ -969,6 +970,7 @@ export async function runGatewayLoop(params: {
         });
       } catch (err) {
         shutdownFailed = true;
+        closeError = err;
         gatewayLog.error(`shutdown step failed (gateway server close): ${formatErrorMessage(err)}`);
       } finally {
         const handoffClosed =
@@ -980,7 +982,7 @@ export async function runGatewayLoop(params: {
           try {
             await hostLifecycle?.retire();
             if (shutdownFailed) {
-              await forceExitAfterStabilityBundle("gateway.restart_close_failed");
+              await forceExitAfterStabilityBundle("gateway.restart_close_failed", 1, closeError);
             } else if (handoffClosed) {
               await handleRestartAfterServerClose(
                 managedUpdateOwner,
@@ -1000,7 +1002,7 @@ export async function runGatewayLoop(params: {
         } else {
           await hostLifecycle?.retire();
           if (isRestart && shutdownFailed) {
-            await forceExitAfterStabilityBundle("gateway.restart_close_failed");
+            await forceExitAfterStabilityBundle("gateway.restart_close_failed", 1, closeError);
           } else {
             params.completeBoot?.(
               isRestart
