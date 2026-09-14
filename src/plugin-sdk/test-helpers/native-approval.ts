@@ -126,12 +126,18 @@ export function createNativeApprovalTestFixture(params: {
   function suppressForwardingFallback(input: ForwardingParams) {
     return capability.delivery?.shouldSuppressForwardingFallback?.(input);
   }
-  function suppressTargetForwarding(cfg: OpenClawConfig, to: string, request = buildExecRequest()) {
+  function suppressTargetForwarding(
+    cfg: OpenClawConfig,
+    to: string,
+    request = buildExecRequest(),
+    nativeRouteActive?: boolean,
+  ) {
     return suppressForwardingFallback({
       cfg,
       approvalKind: "exec",
       target: { channel, to, source: "target" },
       request,
+      nativeRouteActive,
     });
   }
   return {
@@ -262,6 +268,7 @@ export function createNativeApprovalTestFixture(params: {
               approvalKind: "exec",
               target: { channel, to, accountId: "default", source: "session" },
               request,
+              nativeRouteActive: true,
             }),
           ).toBe(expected);
         }
@@ -274,7 +281,7 @@ export function createNativeApprovalTestFixture(params: {
         const cfg = buildTargetModeConfig("exec", [{ channel, to: directTarget }], {
           mode: "both",
         });
-        expect(suppressTargetForwarding(cfg, directTarget)).toBe(true);
+        expect(suppressTargetForwarding(cfg, directTarget, undefined, true)).toBe(true);
       },
       defaultAccountBothTarget: () => {
         const cfg = buildTargetModeConfig("exec", [{ channel, to: directTarget }], {
@@ -289,8 +296,30 @@ export function createNativeApprovalTestFixture(params: {
             cfg,
             directTarget,
             buildExecRequest(directTarget, { turnSourceAccountId: "work" }),
+            true,
           ),
         ).toBe(true);
+      },
+      inactiveNativeRouteKeepsFallback: () => {
+        const cfg = buildConfig({ approvals: { exec: { enabled: true } } });
+        const request = buildExecRequest();
+        expect(
+          suppressForwardingFallback({
+            cfg,
+            approvalKind: "exec",
+            target: { channel, to: directTarget, accountId: "default", source: "session" },
+            request,
+            nativeRouteActive: false,
+          }),
+        ).toBe(false);
+        expect(
+          suppressForwardingFallback({
+            cfg,
+            approvalKind: "exec",
+            target: { channel, to: directTarget, accountId: "default", source: "session" },
+            request,
+          }),
+        ).toBe(false);
       },
     },
   };

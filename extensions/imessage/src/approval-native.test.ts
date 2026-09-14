@@ -204,6 +204,11 @@ describe("imessage approval capability", () => {
   );
 
   it(
+    "keeps forwarding fallback when no native runtime is proven active",
+    checks.inactiveNativeRouteKeepsFallback,
+  );
+
+  it(
     "does not suppress target-only forwarding when native delivery cannot bind that target",
     checks.targetOnlyFallback,
   );

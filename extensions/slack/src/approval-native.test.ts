@@ -484,6 +484,7 @@ describe("slack native approval adapter", () => {
         approvalKind: "plugin",
         target: { channel: "slack", to: "user:U123OWNER", accountId: "default" },
         request,
+        nativeRouteActive: true,
       }),
     ).toBe(true);
   });
@@ -1136,6 +1137,7 @@ describe("slack native approval adapter", () => {
           accountId: "default",
           threadId: "1712345678.123456",
         },
+        nativeRouteActive: true,
         request: {
           id: "plugin:approval-1",
           request: {
@@ -1222,6 +1224,7 @@ describe("slack native approval adapter", () => {
         cfg,
         approvalKind: "plugin",
         target: { channel: "slack", to: "user:U123OWNER", accountId: "default" },
+        nativeRouteActive: true,
         request: {
           id: "plugin:approval-1",
           request: {
@@ -1264,6 +1267,7 @@ describe("slack native approval adapter", () => {
         cfg,
         approvalKind: "plugin",
         target: { channel: "slack", to: "U123OWNER", accountId: "default" },
+        nativeRouteActive: true,
         request: {
           id: "plugin:approval-1",
           request: {
