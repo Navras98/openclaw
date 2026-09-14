@@ -50,7 +50,7 @@ const EMPTY_ALLOW_POLICY_MESSAGE =
 
 function pushEmptyAllowWarning(
   warnings: ConfigValidationIssue[],
-  path: string,
+  policyPath: string,
   policy: unknown,
 ): void {
   if (!isRecord(policy)) {
@@ -58,7 +58,11 @@ function pushEmptyAllowWarning(
   }
   const allow: unknown = policy.allow;
   if (Array.isArray(allow) && allow.length === 0) {
-    warnings.push({ path, message: EMPTY_ALLOW_POLICY_MESSAGE });
+    const alsoAllow: unknown = policy.alsoAllow;
+    if (Array.isArray(alsoAllow) && alsoAllow.length > 0) {
+      return;
+    }
+    warnings.push({ path: policyPath, message: EMPTY_ALLOW_POLICY_MESSAGE });
   }
 }
 
@@ -66,7 +70,9 @@ function pushEmptyAllowWarning(
  * Warns for explicit `allow: []` tool policies. An empty allow list reads as
  * "no tools" but the matcher treats it as allow-all (same as omitting
  * allow), so validation stays silent on a security UX trap. Warn-only: no
- * runtime semantics change. Refs #147342.
+ * runtime semantics change. Skips `allow: []` paired with a non-empty
+ * `alsoAllow` (sub-agent merge keeps the alsoAllow list, so it is not
+ * allow-all). Refs #147342.
  */
 export function collectEmptyAllowPolicyWarnings(config: OpenClawConfig): ConfigValidationIssue[] {
   const warnings: ConfigValidationIssue[] = [];
@@ -75,6 +81,17 @@ export function collectEmptyAllowPolicyWarnings(config: OpenClawConfig): ConfigV
   if (isRecord(globalBySender)) {
     for (const [sender, policy] of Object.entries(globalBySender)) {
       pushEmptyAllowWarning(warnings, `tools.toolsBySender.${sender}`, policy);
+    }
+  }
+  const toolsNode: unknown = config.tools;
+  if (isRecord(toolsNode)) {
+    const subagentsNode: unknown = toolsNode.subagents;
+    if (isRecord(subagentsNode)) {
+      pushEmptyAllowWarning(warnings, "tools.subagents.tools", subagentsNode.tools);
+    }
+    const sandboxNode: unknown = toolsNode.sandbox;
+    if (isRecord(sandboxNode)) {
+      pushEmptyAllowWarning(warnings, "tools.sandbox.tools", sandboxNode.tools);
     }
   }
   for (const entry of listAgentEntries(config)) {

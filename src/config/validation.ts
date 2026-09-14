@@ -40,11 +40,7 @@ import {
   hasChannelDmPolicyDependencyWarningCandidates,
   normalizeBundledChannelId,
 } from "./validation-channel-rules.js";
-import {
-  collectEmptyAllowPolicyWarnings,
-  collectHeartbeatOwnerWarnings,
-  validateConfigObjectRaw,
-} from "./validation-core.js";
+import { collectEmptyAllowPolicyWarnings, collectHeartbeatOwnerWarnings, validateConfigObjectRaw } from "./validation-core.js";
 import { withConfigIssuePath } from "./validation-issues.js";
 import {
   collectExplicitPluginReferences,
@@ -265,8 +261,7 @@ function validateConfigObjectWithPluginsBase(
 
   const issues: ConfigValidationIssue[] = [];
   const warnings: ConfigValidationIssue[] = [];
-  warnings.push(...collectHeartbeatOwnerWarnings(config));
-  warnings.push(...collectEmptyAllowPolicyWarnings(config));
+  warnings.push(...collectHeartbeatOwnerWarnings(config), ...collectEmptyAllowPolicyWarnings(config));
   const hasExplicitPluginsConfig = isRecord(raw) && Object.hasOwn(raw, "plugins");
   const explicitPluginReferences = collectExplicitPluginReferences(raw);
 

@@ -47,11 +47,37 @@ describe("collectEmptyAllowPolicyWarnings", () => {
         },
       }),
     );
-    const paths = warnings.map((warning) => warning.path).sort();
+    const paths = warnings.map((warning) => warning.path).toSorted();
     expect(paths).toEqual([
       "agents.entries.chat.tools",
       "agents.entries.chat.tools.toolsBySender.e164:+390000000000",
     ]);
+  });
+
+  it("warns for sub-agent and sandbox tools scopes", () => {
+    const warnings = collectEmptyAllowPolicyWarnings(
+      configWith({
+        tools: {
+          subagents: { tools: { allow: [] } },
+          sandbox: { tools: { allow: [] } },
+        },
+      }),
+    );
+    const paths = warnings.map((warning) => warning.path).toSorted();
+    expect(paths).toEqual(["tools.sandbox.tools", "tools.subagents.tools"]);
+  });
+
+  it("stays silent when allow: [] is paired with a non-empty alsoAllow", () => {
+    const warnings = collectEmptyAllowPolicyWarnings(
+      configWith({
+        tools: {
+          subagents: { tools: { allow: [], alsoAllow: ["read"] } },
+          allow: [],
+        },
+      }),
+    );
+    const paths = warnings.map((warning) => warning.path).toSorted();
+    expect(paths).toEqual(["tools"]);
   });
 
   it("stays silent when allow is omitted, non-empty, or absent", () => {
