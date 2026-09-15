@@ -295,4 +295,19 @@ describe("update run report", () => {
     expect(legacy.markdown).toContain("Failed: build");
     expect(legacy.markdown).not.toContain("private legacy");
   });
+
+  it("uses the failed finalize step instead of unknown reason when reason is missing", () => {
+    const report = renderUpdateRunReport(
+      run({
+        status: "failed",
+        reason: null,
+        steps: [
+          { step: "requested", status: "failed", startedAtMs: 1, endedAtMs: 2 },
+          { step: "finalize:doctor", status: "failed", startedAtMs: 1, endedAtMs: 2 },
+        ],
+      }),
+    );
+    expect(report.headline).toContain("finalize:doctor");
+    expect(report.headline).not.toContain("unknown reason");
+  });
 });

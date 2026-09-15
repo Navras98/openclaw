@@ -119,7 +119,11 @@ export function renderUpdateRunReport(
   // Git updates can change commits without changing the package version.
   const before = run.before.sha?.slice(0, 8) ?? run.before.version;
   const after = run.after.sha?.slice(0, 8) ?? run.after.version;
-  const reason = bounded(run.reason?.trim() || "unknown reason", 240);
+  const failedSteps = run.steps.filter((step) => step.status === "failed").map((step) => step.step);
+  // Prefer the most specific failed phase over the generic "requested" wrapper,
+  // so a finalize:doctor failure never surfaces as "unknown reason".
+  const failedStepReason = failedSteps.find((step) => step !== "requested") ?? failedSteps[0];
+  const reason = bounded(run.reason?.trim() || failedStepReason || "unknown reason", 240);
   const running =
     run.verification.serviceRunning === true ? run.verification.runningVersion : undefined;
   let headline: string;
