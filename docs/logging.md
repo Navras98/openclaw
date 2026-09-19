@@ -165,8 +165,20 @@ Console logs are **TTY-aware** and formatted for readability:
 - Subsystem prefixes (e.g. `gateway/channels/whatsapp`)
 - Level coloring (info/warn/error)
 - Optional compact or JSON mode
+- Structured fields on `warn`, `error`, and `fatal` records, appended as one
+  compact `key=value ...` tail (nested values as JSON, capped at 2 KiB) so
+  plain-text sinks such as journald keep the diagnostics; `info` and lower
+  console lines stay message-only, and the file log always carries the full record.
+  These fields go through the same redaction as the `json` console style before
+  they are flattened, so a sensitive key such as `apiToken` is masked by name and
+  the length cap can only clip text that is already masked
 
 Console formatting is controlled by `logging.consoleStyle`.
+
+SQLite worker diagnostics use stderr. After the final backend closes normally,
+the worker gives pending console output up to five seconds to drain before
+acknowledging close. This is best effort; forced worker termination can still
+discard pending diagnostics.
 
 ### Gateway WebSocket logs
 
@@ -225,6 +237,18 @@ Chat displays recognized request-limit facts, including the allowed and actual
 number of `cache_control` blocks, in both live failures and saved history. Raw
 proxy metadata stays in redacted diagnostics rather than the chat message.
 
+Saved failed replies also distinguish rate limits, authentication failures,
+provider HTTP errors, and network interruptions. Worker inference preserves
+bounded, redacted error details for classification, including when a large
+partial response cannot fit in the transcript. Unrecognized errors still use
+generic chat copy; inspect the Gateway logs and stored error for diagnosis.
+
+A worker message-size failure is separate from a model context-window limit.
+Retry with a smaller response or continue on the Gateway. If the worker cannot
+preserve the model's continuation data, stop or reclaim it before retrying on
+the Gateway. Earlier tool actions may already have completed, so check their
+results before repeating them.
+
 ### Targeted model transport diagnostics
 
 When debugging provider calls, use targeted environment flags instead of raising
@@ -262,9 +286,11 @@ enabled.
 
 `[model-fetch]` start and response metadata (provider, API, model, status,
 latency, and request fields such as method, URL, timeout, proxy, and policy)
-is always emitted at `info` level regardless of
-`OPENCLAW_DEBUG_MODEL_TRANSPORT`, so basic model transport hygiene is visible
-without debug flags.
+uses `debug` by default. Responses with a non-2xx status or at least one second
+of elapsed time remain at `info`, and transport failures remain warnings.
+Elapsed time includes local-service preparation and waiting for response headers,
+but excludes streaming the response body. The targeted debug flags above promote
+start and fast successful response metadata to `info` when troubleshooting.
 
 `[anthropic] replayed thinking dropped: N block(s)` is a warning when Anthropic
 reports dropping invalidated thinking from replay. It includes the mismatch
@@ -323,18 +349,25 @@ logging. A missing summary does not prove preparation completed without delay.
 ### Session catalog provider waits
 
 With process diagnostics enabled, the `gateway/session-catalog` logger records
-`slow session catalog provider list` for attempts that settle after at least one second. It separates
-`admissionWaitMs`, `providerElapsedMs`, and `completionDelayMs`: waiting for
-catalog provider admission, elapsed time inside the provider call, and the
-continuation after settlement and queue release. These are elapsed intervals,
-not CPU measurements. The Gateway's earlier operator-start queue is separate.
+`slow session catalog provider list` for attempts that settle after at least one second.
+`admissionWaitMs` records initial provider admission waiting. `providerElapsedMs`
+spans the first provider invocation through final logical settlement, including
+waiting between steps of a stepped fill. `completionDelayMs` begins after final
+settlement and queue release. The Gateway's earlier operator-start queue is separate.
+
+`stepCount` counts admitted callbacks. `admittedStepMs` sums their elapsed time
+through actual settlement, including authority checks, factory work, and I/O
+waits. `continuationWaitMs` measures queue waiting after an incomplete step until
+resumption or cancellation; it excludes initial admission. These fields are not
+an exact disjoint partition and do not measure CPU time.
 
 `admitted` and `providerInvoked` distinguish an attempt that never entered the
 queue's active slot from one that called the provider. Unreached intervals are
 omitted. `outcome` reports the attempt's resolution or rejection;
 `signalAborted` reports the signal independently and does not identify an error's
-cause or prove that native work stopped. Provider slots remain owned until their
-returned promises settle, including after cancellation.
+cause or prove that native work stopped. An active provider call or `next()` step
+keeps its slot until its actual promise settles, including after cancellation.
+An inert continuation queues with other callers between steps.
 
 `providerIdHash` hashes provider IDs of at most 256 UTF-16 units; longer IDs omit
 the field. It supports correlation, not anonymization or authorization. Host
@@ -510,6 +543,20 @@ for the entire wait or which work consumed CPU. These are ordinary performance
 logs. They do not use or change [audit identity](/gateway/audit), decisions,
 retention, principal attribution or admission authority.
 
+### Worker pool capacity
+
+Gateway `status` responses include `workerPools.transcriptReconciliation` and
+`workerPools.modelCatalog`. Each reports `maxWorkers`, `workers`, `workersCreated`,
+`activeTasks`, and `pendingTasks` from the pool owner. Both Gateway pools admit one
+worker at a time. Pending tasks include queued and executing work; creation counts
+belong to the current pool lifetime. The startup trace's `memory.ready` record also
+includes these pool counts.
+
+These figures describe worker and task counts. Process RSS includes every isolate
+and native allocation; Node's process heap flags can override a worker's requested
+heap limits. Use constructor or per-isolate measurements when attributing memory
+growth to a particular worker.
+
 ### Slow worktree cleanup
 
 With process diagnostics and info-level logging enabled, two subsystems log
@@ -589,7 +636,7 @@ proof that the main event loop was blocked for the whole interval.
 
 The structured warning also includes `pid`, Node's `threadId`, and `isMainThread`
 for the opener emitting it. Inspect each `openclaw logs --json` event's original
-`raw` record; ordinary console text omits structured metadata.
+`raw` record; warn-level console text also carries these fields as `key=value` pairs.
 An opener on the main thread may have awaited an integrity Worker, so these
 fields do not identify the thread performing every phase. `admissionMode` records
 the actual `sync` or `async` open driver. Async admission offloads its initial
@@ -681,8 +728,8 @@ The timing fields separate the elapsed interval into:
 - `completionDelayMs`: time between callback completion and the caller resuming.
 
 These fields are available when the queued callback started and finished;
-`elapsedMs` records the total duration. Inspect the original `raw` record in
-`openclaw logs --json` to see the structured fields.
+`elapsedMs` records the total duration. The warning's console line carries the
+same fields as `key=value` pairs; `openclaw logs --json` shows the original `raw` record.
 
 Use `operation` to locate the owning code path. It does not identify a specific
 SQL statement, measure CPU time or lock contention, or establish that a nearby
