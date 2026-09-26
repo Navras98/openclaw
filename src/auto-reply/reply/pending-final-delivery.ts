@@ -99,23 +99,6 @@ export function resolvePendingFinalDeliveryCompletion(
     : undefined;
 }
 
-function collectDurableMediaDirectives(payload: ReplyPayload): string[] {
-  if (payload.sensitiveMedia === true) {
-    return [];
-  }
-  const mediaUrls = [...(payload.mediaUrls ?? []), ...(payload.mediaUrl ? [payload.mediaUrl] : [])];
-  const seen = new Set<string>();
-  return mediaUrls
-    .map((mediaUrl) => mediaUrl.trim())
-    .filter((mediaUrl) => {
-      if (!mediaUrl || seen.has(mediaUrl)) {
-        return false;
-      }
-      seen.add(mediaUrl);
-      return true;
-    });
-}
-
 /**
  * Downgrades rich-text-only payloads (visible formatting in `presentation`)
  * to plain text for durable recovery. Buttons/selects (`presentation`
