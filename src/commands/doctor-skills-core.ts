@@ -26,6 +26,12 @@ export function formatMissingSkillSummary(skill: SkillStatusEntry): string {
     ["config", skill.missing.config],
     ["os", skill.missing.os],
   ] as const;
+  return (
+    groups
+      .filter(([, values]) => values.length > 0)
+      .map(([label, values]) => `${label}: ${values.join(", ")}`)
+      .join("; ") || "unknown requirement"
+  );
 }
 
 /** Disables unavailable skills in config while preserving existing skill entries. */

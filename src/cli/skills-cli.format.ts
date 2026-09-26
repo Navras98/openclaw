@@ -270,6 +270,9 @@ export function formatSkillInfo(
     const formatRequirementStatus = (value: string, satisfied: boolean) =>
       satisfied ? theme.success(`✓ ${value}`) : theme.error(`✗ ${value}`);
     for (const [key, label] of requirementGroups) {
+      const required = skill.requirements[key];
+      const missing = skill.missing[key];
+      let requirementStatus: string;
       if (key === "anyBins" || key === "anyEnv" || key === "os") {
         // Missing arrays describe the whole alternative group, not individual availability.
         const prefix = key === "os" ? "" : "any of: ";
