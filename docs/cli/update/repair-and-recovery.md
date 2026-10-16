@@ -964,6 +964,9 @@ captures through their sealed manifests; it never reads the captured payload:
   is always retained.
 - `protected` / `retained-doctor-capture`: a standalone Doctor copy kept by that
   retention rule. Active recovery references remain `pending-update-recovery`.
+- `protected` / `orphan-update-capture`: a sealed update-recovery capture with
+  no matching update run and a name outside the standalone Doctor pattern. No
+  supported command retires unattributed captures yet.
 - `protected` / `unmanifested-update-capture`: an incomplete or unreadable Doctor
   capture, a directory without the capture marker or without a matching update run
   or standalone manifest, and any other file in the capture directory. `unreadable-update-history` also
@@ -1000,3 +1003,4 @@ these recovery originals are **not a full pre-upgrade backup**. See
 [Before updating: create a verified backup](/install/updating#before-updating-create-a-verified-backup)
 for backup coverage and [Doctor recovery](/cli/doctor#session-sqlite-migration)
 for restoring retained originals.
+
