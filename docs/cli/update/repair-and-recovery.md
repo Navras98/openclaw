@@ -1003,4 +1003,3 @@ these recovery originals are **not a full pre-upgrade backup**. See
 [Before updating: create a verified backup](/install/updating#before-updating-create-a-verified-backup)
 for backup coverage and [Doctor recovery](/cli/doctor#session-sqlite-migration)
 for restoring retained originals.
-

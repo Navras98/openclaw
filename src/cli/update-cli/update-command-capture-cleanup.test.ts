@@ -282,4 +282,3 @@ it.each(["current", "pre-migration"] as const)(
     }, location);
   },
 );
-

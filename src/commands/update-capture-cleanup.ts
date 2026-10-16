@@ -37,7 +37,6 @@ function logicalBytes(directory: string): number {
   return bytes;
 }
 
-
 // Mirrors the standalone Doctor name pattern in doctor-capture-retention.ts: that
 // retention policy only recognizes `doctor-<uuid>` names, so a sealed genuine
 // manifest under any other name stays invisible without the orphan diagnostic below.
@@ -278,4 +277,3 @@ export async function retireUpdateCaptures(params: {
     }
   }
 }
-
