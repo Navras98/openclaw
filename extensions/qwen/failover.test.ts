@@ -24,14 +24,8 @@ describe("Qwen quota error semantics", () => {
         // unmarked quota messages cool down instead of disabling the profile.
         [{ status: 429, code, errorMessage: "Unknown quota condition" }, "rate_limit"],
         [{ status: 429, code, errorMessage: "Throttling.AllocationQuota" }, "rate_limit"],
-        [
-          { status: 429, code, errorMessage: "PrepaidBillOverdue: quota frozen" },
-          "billing",
-        ],
-        [
-          { status: 429, code, errorMessage: "insufficient_balance, top up required" },
-          "billing",
-        ],
+        [{ status: 429, code, errorMessage: "PrepaidBillOverdue: quota frozen" }, "billing"],
+        [{ status: 429, code, errorMessage: "insufficient_balance, top up required" }, "billing"],
       );
     }
     for (const code of ["PrepaidBillOverdue", "PostpaidBillOverdue"]) {
