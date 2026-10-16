@@ -1,7 +1,8 @@
 // Schedule error isolation tests cover one bad job not blocking other cron jobs.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import type { CronJob } from "../types.js";
-import { recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
+import { recomputeNextRunsForMaintenance } from "./jobs-scheduling.test-support.js";
 import {
   createCronServiceState,
   type CronServiceState,
@@ -11,6 +12,7 @@ import { runPostPersistCronNotifications } from "./store.js";
 
 function createMockState(jobs: CronJob[]): CronServiceState {
   const state = createCronServiceState({
+    scheduler: createTestGatewayScheduler(),
     storePath: "/tmp/cron-schedule-error-isolation.json",
     cronEnabled: true,
     nowMs: () => Date.now(),
@@ -89,7 +91,7 @@ describe("cron schedule error isolation", () => {
     expect(badJob.enabled).toBe(true);
   });
 
-  it("auto-disables job after 3 consecutive schedule errors", () => {
+  it("auto-disables job after 3 consecutive schedule errors", async () => {
     const badJob = createJob({
       id: "bad-job",
       name: "Bad Job",
@@ -101,7 +103,7 @@ describe("cron schedule error isolation", () => {
     const deferredNotifications: DeferredCronNotifications = [];
     recomputeNextRunsForMaintenance(state, { recomputeExpired: true, deferredNotifications });
     expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
-    runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
+    await runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
 
     // After 3rd error, job should be disabled
     expect(badJob.enabled).toBe(false);

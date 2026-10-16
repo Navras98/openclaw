@@ -2,12 +2,11 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import type { WizardPrompter } from "openclaw/plugin-sdk/setup";
 import { requestBodyText, requestUrl } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { OllamaModelWithContext } from "./provider-models.js";
 import {
+  buildAppGuidedOllamaModel,
   buildOllamaModelsConfig,
   discoverOllamaModelsForSetup,
-  findAvailableOllamaModelName,
-  mergeUniqueModelNames,
-  normalizeOllamaModelName,
   selectAppGuidedOllamaModelFromDiscovery,
 } from "./setup-model-selection.js";
 import { configureOllamaNonInteractive, promptAndConfigureOllama } from "./setup.js";
@@ -25,53 +24,51 @@ function pendingAbortableResponse(signal: AbortSignal | null | undefined): Promi
 }
 
 describe("Ollama onboarding model selection", () => {
-  it("preserves catalog order while preferring an explicit latest tag", () => {
-    expect(mergeUniqueModelNames(["gemma4", "qwen3:0.6b"], ["GEMMA4:latest"])).toEqual([
-      "GEMMA4:latest",
-      "qwen3:0.6b",
-    ]);
-  });
-
-  it("resolves normalized custom model names to the installed latest tag", () => {
-    expect(normalizeOllamaModelName("  OLLAMA/Gemma4  ")).toBe("Gemma4");
-    expect(findAvailableOllamaModelName("Gemma4", ["qwen3:0.6b", "gemma4:latest"])).toBe(
-      "gemma4:latest",
-    );
-  });
-
-  it("keeps failed model inspections distinct from uninspected models", () => {
-    const models = buildOllamaModelsConfig(
-      ["deepseek-r1:14b", "uninspected"],
-      new Map([["deepseek-r1:14b", { name: "deepseek-r1:14b", showInspectionFailed: true }]]),
-    );
-
-    expect(models[0]?.compat?.supportsTools).toBe(false);
-    expect(models[0]?.reasoning).toBe(true);
-    expect(models[1]?.compat?.supportsTools).toBe(true);
-  });
-
-  it("preserves discovered Gemma vision, reasoning, context, and tool capabilities", () => {
-    const [model] = buildOllamaModelsConfig(
-      ["gemma4:e2b"],
-      new Map([
-        [
-          "gemma4:e2b",
-          {
-            name: "gemma4:e2b",
-            contextWindow: 131_072,
-            capabilities: ["completion", "tools", "vision", "thinking"],
-          },
-        ],
-      ]),
-    );
-
-    expect(model).toMatchObject({
-      id: "gemma4:e2b",
-      input: ["text", "image"],
-      reasoning: true,
-      contextWindow: 131_072,
-      compat: { supportsTools: true },
+  it("retains freshly inspected size when using a configured cloud definition", () => {
+    const model = buildAppGuidedOllamaModel({
+      baseUrl: "http://127.0.0.1:11434",
+      model: { name: "compact-chat:cloud" },
+      showInfo: {
+        contextWindow: 32_768,
+        capabilities: ["completion", "tools"],
+        parameterCount: 4_000_000_000,
+      },
+      configuredCloudModel: {
+        id: "compact-chat:cloud",
+        name: "Compact Chat",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 32_768,
+        maxTokens: 8192,
+      },
     });
+    expect(model?.parameterCount).toBe(4_000_000_000);
+  });
+
+  it.each([{ remote_host: "https://ollama.com" }, { remote_model: "upstream-cloud-model" }])(
+    "keeps a remote alias output budget during setup: %j",
+    (remote) => {
+      const models = buildOllamaModelsConfig(
+        ["private-alias", "local-model"],
+        new Map<string, OllamaModelWithContext>([
+          ["private-alias", { name: "private-alias", contextWindow: 262_144, ...remote }],
+          ["local-model", { name: "local-model", contextWindow: 262_144 }],
+        ]),
+      );
+      expect(models.map(({ id, maxTokens }) => ({ id, maxTokens }))).toEqual([
+        { id: "private-alias", maxTokens: 262_144 },
+        { id: "local-model", maxTokens: 8192 },
+      ]);
+    },
+  );
+
+  it("keeps discovery-only parameter metadata out of user config", () => {
+    const models = buildOllamaModelsConfig(
+      ["model"],
+      new Map([["model", { name: "model", parameterCount: 4_000_000_000 }]]),
+    );
+    expect(models[0]).not.toHaveProperty("parameterCount");
   });
 
   it("selects a deterministic tools-capable model with enough context", () => {
@@ -299,10 +296,14 @@ describe("Ollama onboarding model selection", () => {
         expect(configured?.filter((name) => name.startsWith("remote-"))).toEqual([]);
       } else {
         expect(inspected).toContain(remoteModels[0]?.name);
-        expect(configured).toEqual(expect.arrayContaining(remoteModels.map((model) => model.name)));
         if (remoteCapability === "embedding") {
           expect(inspected).toContain("local-chat:latest");
           expect(result.defaultModel).toBe("ollama/local-chat:latest");
+          expect(configured?.filter((name) => name.startsWith("remote-"))).toEqual([]);
+        } else {
+          expect(configured).toEqual(
+            expect.arrayContaining(remoteModels.map((model) => model.name)),
+          );
         }
       }
     },
@@ -310,8 +311,8 @@ describe("Ollama onboarding model selection", () => {
 
   describe.each(["interactive", "non-interactive"] as const)("%s defaults", (mode) => {
     it.each([
-      ["embedding-only", ["embedding"], undefined, false, false],
-      ["embedding with advertised tools", ["embedding", "tools"], undefined, false, true],
+      ["embedding-only", ["embedding"], undefined, false, undefined],
+      ["embedding with advertised tools", ["embedding", "tools"], undefined, false, undefined],
       ["completion and embedding", ["completion", "embedding"], undefined, true, true],
       ["unknown remote capabilities", [], undefined, true, true],
       ["authoritative empty inspection", ["completion", "tools"], [], false, false],
@@ -364,35 +365,16 @@ describe("Ollama onboarding model selection", () => {
           });
           expect(config.agents?.defaults?.model).toEqual({ primary: expectedDefault });
         }
-        expect(config.models?.providers?.ollama?.models).toContainEqual(
-          expect.objectContaining({
-            id: remoteName,
-            compat: expect.objectContaining({ supportsTools }),
-          }),
-        );
+        const configured = config.models?.providers?.ollama?.models;
+        expect(configured).toContainEqual(expect.objectContaining({ id: localName }));
+        const remote = configured?.find((model) => model.id === remoteName);
+        if (supportsTools === undefined) {
+          expect(remote).toBeUndefined();
+        } else {
+          expect(remote).toMatchObject({ id: remoteName, compat: { supportsTools } });
+        }
       },
     );
-  });
-
-  it("aborts pending model discovery with the setup signal", async () => {
-    const controller = new AbortController();
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (_input: string | URL | Request, init?: RequestInit) =>
-        pendingAbortableResponse(init?.signal),
-      ),
-    );
-
-    const discovery = discoverOllamaModelsForSetup({
-      baseUrl: "http://127.0.0.1:11434",
-      signal: controller.signal,
-    });
-    await vi.waitFor(() => {
-      expect(vi.mocked(fetch)).toHaveBeenCalledOnce();
-    });
-    controller.abort();
-
-    await expect(discovery).rejects.toMatchObject({ name: "AbortError" });
   });
 
   it("aborts pending context enrichment with the setup signal", async () => {

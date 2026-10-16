@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { hashFileDescriptorSync } from "../infra/file-descriptor.js";
 import { FsSafeError, walkDirectorySync } from "../infra/fs-safe.js";
@@ -18,6 +19,7 @@ import {
   prefersBuiltPluginArtifacts,
   resolvePluginRuntimeArtifactPreference,
 } from "./plugin-runtime-artifact-selection.js";
+import { isPluginSourceEntry } from "./plugin-source-file.js";
 import { getPluginRegistryForContext } from "./runtime.js";
 import { getPluginRuntimeLoadContextState } from "./runtime/load-context-state.js";
 
@@ -25,7 +27,8 @@ const MAX_RUNTIME_ARTIFACT_DEPTH = 64;
 const MAX_RUNTIME_ARTIFACT_ENTRIES = 50_000;
 const MAX_RUNTIME_ARTIFACT_FILE_BYTES = 256 * 1024 * 1024;
 const MAX_RUNTIME_ARTIFACT_TOTAL_BYTES = 512 * 1024 * 1024;
-const EXCLUDED_RUNTIME_ARTIFACT_DIRECTORIES = new Set([".git", ".hg", ".svn", "node_modules"]);
+const isRuntimeArtifactEntry = (name: string) =>
+  isPluginSourceEntry(name) && name !== ".hg" && name !== ".svn";
 
 export type PluginRuntimeArtifactIdentitySource = Readonly<{
   pluginId: string;
@@ -61,9 +64,8 @@ function listRuntimeArtifactFiles(rootDir: string): string[] {
     maxDepth: MAX_RUNTIME_ARTIFACT_DEPTH,
     maxEntries: MAX_RUNTIME_ARTIFACT_ENTRIES,
     symlinks: "include",
-    descend: (entry) => !EXCLUDED_RUNTIME_ARTIFACT_DIRECTORIES.has(entry.name),
-    include: (entry) =>
-      entry.kind !== "directory" && !EXCLUDED_RUNTIME_ARTIFACT_DIRECTORIES.has(entry.name),
+    descend: (entry) => isRuntimeArtifactEntry(entry.name),
+    include: (entry) => entry.kind !== "directory" && isRuntimeArtifactEntry(entry.name),
   });
   if (scan.truncated) {
     throw new Error("plugin runtime artifact exceeds the bounded file scan");
@@ -81,10 +83,8 @@ function listRuntimeArtifactFiles(rootDir: string): string[] {
     .toSorted();
 }
 
-function sameOpenedFile(before: fs.Stats, after: fs.Stats): boolean {
+function sameOpenedFileMetadata(before: fs.Stats, after: fs.Stats): boolean {
   return (
-    before.dev === after.dev &&
-    before.ino === after.ino &&
     before.size === after.size &&
     before.mtimeMs === after.mtimeMs &&
     before.ctimeMs === after.ctimeMs
@@ -112,7 +112,12 @@ function hashRuntimeArtifactFile(params: {
   try {
     const hashed = hashFileDescriptorSync(opened.fd, opened.stat.size);
     const after = fs.fstatSync(opened.fd);
-    if (hashed.sizeBytes !== opened.stat.size || !sameOpenedFile(opened.stat, after)) {
+    const identity = fs.fstatSync(opened.fd, { bigint: true });
+    if (
+      hashed.sizeBytes !== opened.stat.size ||
+      !sameFileIdentity(opened.exactIdentity, identity) ||
+      !sameOpenedFileMetadata(opened.stat, after)
+    ) {
       throw new Error(changedMessage);
     }
     return { hash: hashed.sha256, size: opened.stat.size, mode: opened.stat.mode };

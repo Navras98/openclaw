@@ -1,10 +1,10 @@
-import type { ReactiveController } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { hasNativeBrowserBridge } from "../../app/native-browser-bridge.ts";
 import { postNativeExternalLink } from "../../app/native-link-routing.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
+import type { PanelLifecycleController } from "../solid-panel-controller.ts";
 import type { AnnotationStroke } from "./browser-annotation.ts";
 import type {
   BrowserRequestClient,
@@ -21,30 +21,29 @@ import {
   openBrowserTab,
   startBrowser,
 } from "./browser-client.ts";
-import { BrowserPanelInputController } from "./browser-panel-controller-input.ts";
 import { BrowserPanelDownload } from "./browser-panel-download.ts";
+import { BrowserPanelInputOwner } from "./browser-panel-input-owner.ts";
 import { BrowserPanelNativeController } from "./browser-panel-native-controller.ts";
 import {
   BrowserPanelOperationOwnership,
   type BrowserPanelControllerHost,
 } from "./browser-panel-operation-ownership.ts";
 import { BrowserPanelPendingInput } from "./browser-panel-pending-input.ts";
-import { BrowserPanelSnapshotController } from "./browser-panel-snapshot-controller.ts";
+import { createBrowserPanelSnapshot } from "./browser-panel-snapshot.ts";
 import { BrowserPanelStream } from "./browser-panel-stream.ts";
 import type { BrowserPanelView } from "./browser-panel-surface.ts";
-import { BrowserPanelViewportController } from "./browser-panel-viewport-controller.ts";
+import { BrowserPanelViewportOwner } from "./browser-panel-viewport-owner.ts";
 import { browserRouteKey, type BrowserRoute } from "./browser-target.ts";
 import { normalizeBrowserUrlDraft } from "./browser-url.ts";
-
-const ACTION_REFRESH_DELAY_MS = 350;
 
 type BrowserPanelMode = "interact" | "annotate" | "inspect";
 
 export type { BrowserPanelControllerHost } from "./browser-panel-operation-ownership.ts";
 
 /** Browser session, navigation, capture, and input lifecycle for the docked surface. */
-export class BrowserPanelController implements ReactiveController {
+export class BrowserPanelController implements PanelLifecycleController {
   running: boolean | null = null;
+  canAutoResizeViewport = false;
   tabs: BrowserPanelTab[] = [];
   /** Stable tab handle (plugin alias when available), not a raw CDP target id. */
   activeTargetId: string | null = null;
@@ -64,16 +63,16 @@ export class BrowserPanelController implements ReactiveController {
   readonly operations: BrowserPanelOperationOwnership;
   readonly pendingInput = new BrowserPanelPendingInput();
   readonly download = new BrowserPanelDownload(this);
-  readonly input: BrowserPanelInputController;
+  readonly input: BrowserPanelInputOwner;
   readonly stream: BrowserPanelStream;
   private activeClient: GatewayBrowserClient | null = null;
   urlDraftEditing = false;
-  private readonly viewport = new BrowserPanelViewportController(this);
-  private readonly snapshot = new BrowserPanelSnapshotController(this);
+  private readonly viewport = new BrowserPanelViewportOwner(this);
+  private readonly snapshot = createBrowserPanelSnapshot(this);
 
   constructor(readonly host: BrowserPanelControllerHost) {
     this.operations = new BrowserPanelOperationOwnership(host);
-    this.input = new BrowserPanelInputController(this);
+    this.input = new BrowserPanelInputOwner(this);
     this.stream = new BrowserPanelStream(this);
     this.native = new BrowserPanelNativeController(this);
     host.addController(this);
@@ -165,6 +164,7 @@ export class BrowserPanelController implements ReactiveController {
   resetBrowserState(): void {
     this.invalidateViewOperations();
     this.setState("running", null);
+    this.setState("canAutoResizeViewport", false);
     const nativeTab = this.native.activeTab ?? this.native.tabs[0];
     this.setState("tabs", this.native.tabs);
     this.setState("activeTargetId", nativeTab?.id ?? null);
@@ -214,6 +214,7 @@ export class BrowserPanelController implements ReactiveController {
         return;
       }
       this.setState("running", snapshot.running);
+      this.setState("canAutoResizeViewport", snapshot.canAutoResizeViewport);
       this.setState(
         "tabs",
         this.native.mergeRemoteTabs(this.operations.retainTabSnapshot(client, snapshot.tabs)),
@@ -236,9 +237,7 @@ export class BrowserPanelController implements ReactiveController {
         this.exitCaptureModes();
       }
       this.setState("activeTargetId", active?.id ?? null);
-      if (!this.urlDraftEditing) {
-        this.setState("urlDraft", active?.url ?? "");
-      }
+      this.syncUrlDraft(active?.url ?? "");
       if (active) {
         await this.refreshView(active.id, invocation.epoch);
       } else {
@@ -273,11 +272,7 @@ export class BrowserPanelController implements ReactiveController {
       this.setState("errorText", null);
       await action(client);
       if (current() && refreshView) {
-        this.pendingInput.scheduleRefresh(ACTION_REFRESH_DELAY_MS, () => {
-          if (current() && this.activeTargetId) {
-            void this.refreshView(this.activeTargetId, epoch);
-          }
-        });
+        this.snapshot.scheduleRefresh(epoch, current);
       }
       return current();
     } catch (error) {
@@ -368,9 +363,7 @@ export class BrowserPanelController implements ReactiveController {
         invocation.epoch = this.operations.epoch;
         this.exitCaptureModes();
         const targetId = this.activeTargetId;
-        previousNavigationQueued =
-          this.operations.hasQueuedNavigation(client, targetId) ||
-          this.operations.hasUnreconciledNavigation(client, targetId);
+        previousNavigationQueued = this.operations.hasPendingNavigation(client, targetId);
         await this.operations.queueNavigation(client, targetId, async () => {
           if (invocation.isCurrent()) {
             await navigateBrowser(client, { url, targetId });
@@ -411,9 +404,7 @@ export class BrowserPanelController implements ReactiveController {
           ) {
             this.setState("activeTargetId", null);
             this.setState("view", null);
-            if (!this.urlDraftEditing) {
-              this.setState("urlDraft", "");
-            }
+            this.syncUrlDraft("");
           }
         }
         this.reportError(error);
@@ -511,9 +502,7 @@ export class BrowserPanelController implements ReactiveController {
         // The prior remote document changed while selection failed. Expose an
         // unavailable state instead of restoring a screenshot that no longer owns it.
         this.setState("activeTargetId", null);
-        if (!this.urlDraftEditing) {
-          this.setState("urlDraft", "");
-        }
+        this.syncUrlDraft("");
         return;
       }
       this.setState("activeTargetId", previous.targetId);

@@ -1,5 +1,6 @@
+import { isDeepStrictEqual } from "node:util";
 import { getSubagentRegistryPublicationRevision } from "../agents/subagents/registry/subagent-registry-publication.js";
-import { buildSubagentSessionListReadIndex } from "../agents/subagents/registry/subagent-registry-read.js";
+import { createSubagentSessionListReadIndex } from "../agents/subagents/registry/subagent-registry-read-index.js";
 import type { SubagentSessionListReadView } from "../agents/subagents/registry/subagent-registry-state.js";
 import {
   buildProjectedAgentRunIndex,
@@ -14,6 +15,7 @@ import type { SessionChildLink } from "./session-utils-core.js";
 import {
   buildProjectedSubagentActivity,
   buildSessionListRowMetadataContext,
+  projectSessionRowChildLinks,
 } from "./session-utils-projection.js";
 import { refreshSessionRowProfiles } from "./session-utils-row.js";
 
@@ -29,10 +31,11 @@ export function createSessionRowProjectionContext(subagents: SubagentSessionList
   let modelFactsDirty = false;
   const identityProjection = createSessionIdentityProjection();
   const initialNow = Date.now();
+  const subagentIndex = createSubagentSessionListReadIndex(subagents, initialNow);
   let current = {
     ...buildSessionListRowMetadataContext({
       now: initialNow,
-      subagentRuns: buildSubagentSessionListReadIndex(initialNow, undefined, subagents.runs()),
+      subagentRuns: subagentIndex.read(initialNow),
     }),
     identityProjection,
   };
@@ -54,19 +57,17 @@ export function createSessionRowProjectionContext(subagents: SubagentSessionList
       registrySnapshot = snapshot;
     }
     const now = Date.now();
-    if (registryRevision !== revision) {
+    const previousIndexRevision = subagentIndex.revision;
+    const subagentRuns = subagentIndex.read(now);
+    const subagentChanged = previousIndexRevision !== subagentIndex.revision;
+    if (subagentChanged || registryRevision === undefined) {
       subagentRevision++;
     }
-    const subagentRuns =
-      registryRevision === revision
-        ? current.subagentRuns.atTime(now)
-        : buildSubagentSessionListReadIndex(now, undefined, subagents.runs());
     // Keep maps local to this projection; independent builders still own fresh indexes.
     const projectedAgentRuns =
       agentRunRevision === runRevision ? current.projectedAgentRuns : buildProjectedAgentRunIndex();
     const projectedSubagentActivity =
-      projectedAgentRuns === current.projectedAgentRuns &&
-      subagentRuns.latestRunsByChildSessionKey === current.subagentRuns.latestRunsByChildSessionKey
+      projectedAgentRuns === current.projectedAgentRuns && !subagentChanged
         ? current.projectedSubagentActivity
         : buildProjectedSubagentActivity(subagentRuns, projectedAgentRuns);
     current = modelFactsDirty
@@ -94,6 +95,7 @@ export function createSessionRowProjectionContext(subagents: SubagentSessionList
     preparedEpoch = epoch;
   }
   return {
+    dispose: subagentIndex.dispose,
     readPrepared(epoch: number): SessionListRowContext | undefined {
       return preparedEpoch === epoch &&
         parentRevision === subagentRevision &&
@@ -113,24 +115,29 @@ export function createSessionRowProjectionContext(subagents: SubagentSessionList
     /** True means the publication changes only these derived facts. */
     invalidate(change: SessionRowChange): boolean {
       if (!("all" in change)) {
-        if (change.scope === "runtime" && !change.facts && !change.factsInvalidated) {
+        if (
+          change.scope === "runtime" &&
+          (!change.facts || change.facts.kind === "unchanged") &&
+          !change.factsInvalidated
+        ) {
           return true;
         }
-        modelFactsDirty = true;
         return false;
       }
+      if (typeof change.scope === "object" && change.scope.topology && !change.factsInvalidated) {
+        return true;
+      }
       switch (change.scope) {
+        case "config-profiles":
         case "profiles":
           current.userProfileIdentityById.clear();
           identityProjection.invalidate();
           profileRevision++;
           return true;
+        case "config-presentation":
         case "subagent-runs":
-          registryRevision = undefined;
-          return true;
         case "worker-environments":
         case "worker-placements":
-          return true;
         case "agent-runs":
         case "sessions":
           // Registries are presented live; stored writes publish their own exact keys.
@@ -150,15 +157,14 @@ export function createSessionRowProjectionContext(subagents: SubagentSessionList
       put: (row: records.Row) => void,
       referenced: (reference: string) => records.Row | undefined,
     ) {
-      const previous = current.subagentRunsByChildSessionKey;
+      const broad = registryRevision === undefined;
       prepare(epoch);
       if (parentRevision === subagentRevision) {
         return;
       }
-      for (const key of new Set([
-        ...previous.keys(),
-        ...current.subagentRunsByChildSessionKey.keys(),
-      ])) {
+      for (const key of broad
+        ? current.subagentRunsByChildSessionKey.keys()
+        : subagentIndex.changedChildren) {
         for (const row of matching({ key })) {
           if (!row.storedEntry) {
             continue;
@@ -170,7 +176,7 @@ export function createSessionRowProjectionContext(subagents: SubagentSessionList
             current,
             referenced,
           );
-          if (!records.sameParents(row.parents, parents)) {
+          if (!isDeepStrictEqual(row.parents, parents)) {
             put({ ...row, parents });
           }
         }
@@ -186,13 +192,16 @@ export function createSessionRowProjectionContext(subagents: SubagentSessionList
         row.profileRevision = profileRevision;
       }
       if (row.subagentRevision !== subagentRevision) {
-        row.materialized.source.childLinks = readChildLinks(row);
-        row.materialized.row.swarm = buildSessionSwarmSummary(
+        row.materialized.source.childLinks = projectSessionRowChildLinks(readChildLinks(row));
+        const swarm = buildSessionSwarmSummary(
           current.subagentRuns.swarmRunsByRequesterSessionKey.get(row.key) ?? [],
           row.key,
           row.agentId,
           { includeChildren: true },
         );
+        if (!isDeepStrictEqual(row.materialized.row.swarm, swarm)) {
+          row.materialized.row.swarm = swarm;
+        }
         row.subagentRevision = subagentRevision;
       }
     },

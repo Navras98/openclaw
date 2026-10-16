@@ -2,10 +2,11 @@ import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
+import { readDarwinBunProcessCensus } from "./darwin-bun-process-census.js";
 
 export type ProcessCommand =
-  | { argv: string[]; serviceMarker?: string }
-  | { argvUnavailable: true; executable: string; uid: number };
+  | { argv: string[]; executable?: string; serviceMarker?: string; uid?: number }
+  | { argvUnavailable: true; uid: number };
 
 type GroupMember = {
   pid: number;
@@ -13,6 +14,41 @@ type GroupMember = {
   state: string;
   command?: { ppid: number } & ProcessCommand;
 };
+
+/** Reject a known unsupported legacy contract before launching application work. */
+export function assertProcessGroupControl(): void {
+  if (process.platform !== "linux") {
+    return;
+  }
+  try {
+    process.kill(0, 0);
+  } catch (cause) {
+    throw new Error(
+      "Process-group ownership is unavailable; use a matching Node host and worker with native process ownership. Cleanup cannot fall back to transport-only execution.",
+      { cause },
+    );
+  }
+}
+
+function readLinuxProcessUid(pid: number): number | undefined {
+  try {
+    const lines = readFileSync(`/proc/${pid}/status`, "utf8")
+      .split("\n")
+      .filter((line) => line.startsWith("Uid:"));
+    const fields =
+      lines.length === 1
+        ? /^Uid:[ \t]+(\d+)[ \t]+(\d+)[ \t]+(\d+)[ \t]+(\d+)[ \t]*$/.exec(lines[0]!)
+        : null;
+    const ids = fields?.slice(1).map(Number);
+    const inspectorUid = process.getuid?.();
+    // Any matching credential UID denotes our account; otherwise retain the real UID.
+    return ids?.every((uid) => Number.isSafeInteger(uid) && uid <= 0xffff_ffff)
+      ? (ids.find((uid) => uid === inspectorUid) ?? ids[0])
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /** Only kernel absence, observed outside the owned group, confirms extinction. */
 export function isOwnedProcessGroupGone(pgid: number): boolean {
@@ -28,6 +64,22 @@ export function isOwnedProcessGroupGone(pgid: number): boolean {
       return false;
     }
     throw error;
+  }
+}
+
+/** Stop in-group descendants without killing the anchor that observes their lineage. */
+export function killOwnedProcessGroupMembers(): void {
+  for (const { pid, pgid } of readProcessGroupMembers(1_000)) {
+    if (pid === process.pid || pgid !== process.pid) {
+      continue;
+    }
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch (error) {
+      if (extractErrorCode(error) !== "ESRCH") {
+        throw error;
+      }
+    }
   }
 }
 
@@ -51,10 +103,25 @@ export function* readProcessGroupMembers(
       const pid = Number(name);
       let stat: string;
       let argv: string[] | undefined;
+      let uid: number | undefined;
+      let opaqueForeignOwner = false;
       try {
         stat = readFileSync(`/proc/${name}/stat`, "utf8");
         if (includeCommand) {
-          argv = readFileSync(`/proc/${name}/cmdline`, "utf8").split("\0").filter(Boolean);
+          uid = readLinuxProcessUid(pid);
+          try {
+            argv = readFileSync(`/proc/${name}/cmdline`, "utf8").split("\0").filter(Boolean);
+          } catch (error) {
+            const inspectorUid = process.getuid?.();
+            opaqueForeignOwner =
+              uid !== undefined &&
+              inspectorUid !== undefined &&
+              uid !== inspectorUid &&
+              ["EACCES", "EPERM"].includes(extractErrorCode(error) ?? "");
+            if (!opaqueForeignOwner) {
+              throw error;
+            }
+          }
         }
       } catch (error) {
         // Foreign processes may disappear between enumeration and their stat read.
@@ -78,20 +145,49 @@ export function* readProcessGroupMembers(
         const flags = Number(stat.slice(stat.lastIndexOf(")") + 2).split(/\s+/)[6]);
         const kernelThread = Number.isInteger(flags) && (flags & 0x0020_0000) !== 0;
         if (!kernelThread && !isPidDefinitelyDead(pid)) {
-          throw new Error(
-            `Could not classify PID ${pid}: live userspace process has no readable arguments.`,
-          );
+          const inspectorUid = process.getuid?.();
+          if (uid !== undefined && inspectorUid !== undefined && uid !== inspectorUid) {
+            opaqueForeignOwner = true;
+            argv = undefined;
+          } else {
+            throw new Error(
+              `Could not classify PID ${pid}: live userspace process has no readable arguments.`,
+            );
+          }
         }
       }
       yield {
         pid,
         pgid: Number(match[4]),
         state: match[2]!,
-        ...(argv ? { command: { ppid: Number(match[3]), argv } } : {}),
+        ...(argv
+          ? { command: { ppid: Number(match[3]), argv, ...(uid === undefined ? {} : { uid }) } }
+          : opaqueForeignOwner && uid !== undefined
+            ? { command: { ppid: Number(match[3]), argvUnavailable: true, uid } }
+            : {}),
       };
     }
     if (Date.now() >= deadline) {
       throw new Error("Process group census exceeded its deadline");
+    }
+    return;
+  }
+  if (process.platform === "darwin" && process.versions.bun) {
+    for (const member of readDarwinBunProcessCensus(timeoutMs)) {
+      const command = includeCommand
+        ? member.state === "Z"
+          ? { argv: [] }
+          : commandInspection?.readDarwinCommand(member.pid, member.uid)
+        : undefined;
+      if (includeCommand && !command) {
+        continue;
+      }
+      yield {
+        pid: member.pid,
+        pgid: member.pgid,
+        state: member.state,
+        ...(command ? { command: { ppid: member.ppid, ...command, uid: member.uid } } : {}),
+      };
     }
     return;
   }
@@ -138,7 +234,9 @@ export function* readProcessGroupMembers(
         pid,
         pgid: Number(match[2]),
         state: match[3]!,
-        ...(command ? { command: { ppid: Number(match[4]), ...command } } : {}),
+        ...(command
+          ? { command: { ppid: Number(match[4]), ...command, uid: Number(match[5]) >>> 0 } }
+          : {}),
       };
     }
   }
